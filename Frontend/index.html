@@ -1,0 +1,276 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="theme-color" content="#0b1220">
+    <title>EV CAN | Monitoring Studio</title>
+    <link rel="stylesheet" href="/static/Style.css">
+    <link rel="stylesheet" href="/static/browser-can.css">
+    <script type="module" src="/static/app.js"></script>
+</head>
+<body>
+    <aside class="sidebar">
+        <a class="brand e3-brand" href="/" aria-label="E3 ELECTRIC.AI home">
+            <img
+                src="/static/e3-electric-ai-logo.png"
+                alt="E3 ELECTRIC.AI — TRION"
+                class="e3-brand-logo"
+            >
+        </a>
+
+        <div class="nav-caption">WORKSPACE</div>
+        <nav>
+            <button class="nav-button active" type="button" data-view="dashboard">
+                <span class="nav-icon">▦</span> Live CAN Monitor
+            </button>
+        </nav>
+
+        <div class="sidebar-bottom">
+            <div class="sidebar-footnote">
+                LISTEN-ONLY MODE<br>
+                <span>No CAN messages transmitted</span>
+            </div>
+        </div>
+    </aside>
+
+    <main class="main-content">
+        <header class="topbar">
+            <div>
+                <div class="eyebrow">VEHICLE NETWORK / DIAGNOSTICS</div>
+                <h1 id="pageTitle">Browser CAN monitor</h1>
+                <p class="page-subtitle">
+                    Plug the CAN adapter into this laptop, load the DBC, and connect in Chrome.
+                    Everything runs in the browser — no PCAN Gateway required.
+                </p>
+            </div>
+            <div class="top-actions">
+                <div class="side-status header-device-status" id="statusBox">
+                    <span id="statusDot" class="status-dot bc-dot"></span>
+                    <div>
+                        <strong id="statusText">Adapter disconnected.</strong>
+                        <small>WebUSB / Web Serial</small>
+                    </div>
+                </div>
+                <!-- Retained for compatibility with existing dashboard scripts -->
+                <span id="headerDot" class="mini-dot" hidden></span>
+                <span id="dbcText" hidden>Adapter idle</span>
+            </div>
+        </header>
+
+        <div class="bc-warning" id="browserWarning" hidden>
+            This browser does not support Web Serial / WebUSB. Use Google Chrome or Microsoft Edge on a desktop computer.
+        </div>
+
+        <section class="panel">
+            <div class="panel-heading">
+                <div>
+                    <div class="section-kicker">SETUP</div>
+                    <h2>1 · DBC file</h2>
+                    <p>Load the BMS DBC from the server or choose a local .dbc file.</p>
+                </div>
+            </div>
+            <div class="bc-row" style="padding: 0 24px 20px;">
+                <label class="bc-file">
+                    <input type="file" id="dbcFile" accept=".dbc,text/plain">
+                    <span>Choose .dbc file</span>
+                </label>
+                <button id="dbcAwsBtn" class="bc-btn bc-btn-quiet" type="button">Load BMS DBC from server</button>
+            </div>
+            <p class="bc-muted" id="dbcInfo" style="padding: 0 24px 20px;">No DBC loaded.</p>
+        </section>
+
+        <section class="panel">
+            <div class="panel-heading">
+                <div>
+                    <div class="section-kicker">SETUP</div>
+                    <h2>2 · CAN adapter</h2>
+                    <p>Connect PEAK PCAN-USB (WebUSB), SLCAN, or use the simulator.</p>
+                </div>
+            </div>
+            <div class="bc-grid" style="padding: 0 24px;">
+                <label>Adapter
+                    <select id="transportSelect">
+                        <option value="pcan">PEAK PCAN-USB (WebUSB)</option>
+                        <option value="slcan">SLCAN / CANable / USBtin (Web Serial)</option>
+                        <option value="sim">Simulator (no hardware)</option>
+                    </select>
+                </label>
+                <label>Bitrate
+                    <select id="bitrateSelect">
+                        <option value="1000000">1 Mbit/s</option>
+                        <option value="800000">800 kbit/s</option>
+                        <option value="500000" selected>500 kbit/s</option>
+                        <option value="250000">250 kbit/s</option>
+                        <option value="125000">125 kbit/s</option>
+                        <option value="100000">100 kbit/s</option>
+                        <option value="50000">50 kbit/s</option>
+                        <option value="20000">20 kbit/s</option>
+                        <option value="10000">10 kbit/s</option>
+                    </select>
+                </label>
+                <label class="bc-check">
+                    <input type="checkbox" id="listenOnly" checked>
+                    Listen-only (never transmit / ACK)
+                </label>
+            </div>
+            <div class="bc-row" style="padding: 16px 24px 8px;">
+                <button id="connectBtn" class="bc-btn bc-btn-primary" type="button">Connect</button>
+                <button id="disconnectBtn" class="bc-btn" type="button" disabled>Disconnect</button>
+            </div>
+            <details class="bc-help" id="pcanHelp" style="margin: 0 24px 20px;">
+                <summary>First-time PCAN-USB setup on Windows (one time only)</summary>
+                <ol>
+                    <li>Chrome can only open the PCAN-USB if Windows uses the generic <strong>WinUSB</strong> driver, not PEAK's driver.</li>
+                    <li>Download <a href="https://zadig.akeo.ie/" target="_blank" rel="noopener">Zadig</a>, plug in the PCAN-USB, and run Zadig.</li>
+                    <li>Menu <em>Options → List All Devices</em>, select <em>PCAN-USB</em>, choose <strong>WinUSB</strong>, click <em>Replace Driver</em>.</li>
+                    <li>Re-plug the adapter, then click <em>Connect</em> here and pick the PCAN-USB in Chrome's popup.</li>
+                    <li>To use PEAK tools such as PCAN-View again, reinstall the PEAK driver from Device Manager.</li>
+                </ol>
+            </details>
+        </section>
+
+        <div class="metric-grid">
+            <article class="metric-card">
+                <div class="metric-top"><span>FRAMES RECEIVED</span><span class="metric-symbol">⌁</span></div>
+                <div class="metric-value" id="mFrames">0</div>
+                <div class="metric-foot">Total frames this session</div>
+            </article>
+            <article class="metric-card">
+                <div class="metric-top"><span>FRAMES / SECOND</span><span class="metric-symbol">↻</span></div>
+                <div class="metric-value" id="mRate">0</div>
+                <div class="metric-foot">Live receive rate</div>
+            </article>
+            <article class="metric-card">
+                <div class="metric-top"><span>UNIQUE CAN IDs</span><span class="metric-symbol">#</span></div>
+                <div class="metric-value" id="mIds">0</div>
+                <div class="metric-foot">Distinct IDs seen this session</div>
+            </article>
+            <article class="metric-card accent-card">
+                <div class="metric-top"><span>DBC-DECODED FRAMES</span><span class="metric-symbol">✓</span></div>
+                <div class="metric-value" id="mDecoded">0</div>
+                <div class="metric-foot">Matched against loaded DBC</div>
+            </article>
+        </div>
+
+        <section class="panel bms-panel">
+            <div class="panel-heading">
+                <div>
+                    <div class="section-kicker">BATTERY MANAGEMENT SYSTEM</div>
+                    <h2>Live decoded signals</h2>
+                    <p>Values extracted from received CAN frames using your DBC.</p>
+                </div>
+                <div class="bc-row">
+                    <input type="search" id="signalSearch" placeholder="Filter signals or messages…">
+                    <button id="recordBtn" class="bc-btn" type="button">● Start recording</button>
+                    <button id="exportBtn" class="bc-btn bc-btn-quiet" type="button" disabled>↓ Export CSV</button>
+                    <span class="bc-muted" id="recordInfo"></span>
+                </div>
+            </div>
+            <div id="signalGrid" class="bms-signal-grid bc-signal-grid">
+                <div class="signal-empty bc-empty">Waiting for decoded CAN frames…</div>
+            </div>
+        </section>
+
+        <section class="panel">
+            <div class="panel-heading">
+                <div>
+                    <div class="section-kicker">CAPTURE STREAM</div>
+                    <h2>Raw CAN frames</h2>
+                    <p>Raw payload and decoded message names side by side.</p>
+                </div>
+                <div class="bc-row">
+                    <label class="bc-check"><input type="checkbox" id="onlyDbc" checked> Only DBC messages</label>
+                    <span class="bc-muted" id="unmatchedInfo"></span>
+                    <label class="bc-check"><input type="checkbox" id="pauseRaw"> Pause</label>
+                    <button id="clearBtn" class="bc-btn bc-btn-quiet" type="button">Clear</button>
+                </div>
+            </div>
+            <div class="table-wrapper">
+                <table class="wide-table">
+                    <thead>
+                        <tr>
+                            <th>Time</th>
+                            <th>CAN ID</th>
+                            <th>Fmt</th>
+                            <th>DLC</th>
+                            <th>Data (hex)</th>
+                            <th>Message</th>
+                        </tr>
+                    </thead>
+                    <tbody id="rawTable">
+                        <tr><td colspan="6" class="empty bc-empty">No frames yet. Connect the adapter to see live data.</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </section>
+
+        <section class="panel gateway-panel">
+            <div class="panel-heading">
+                <div>
+                    <div class="section-kicker">HARDWARE CONNECTION</div>
+                    <h2>Zadig — USB driver installation made easy</h2>
+                    <p>
+                        For PCAN-USB in Chrome (WebUSB), Windows must use the generic
+                        <strong>WinUSB</strong> driver. Zadig installs that driver in one step.
+                    </p>
+                </div>
+                <span class="result-count">Windows</span>
+            </div>
+
+            <div class="gateway-content">
+                <div class="gateway-info">
+                    <h3>How to install WinUSB with Zadig</h3>
+                    <ol>
+                        <li>Download Zadig from the official site (portable — no install required).</li>
+                        <li>Plug in your PCAN-USB adapter.</li>
+                        <li>Open Zadig → <em>Options → List All Devices</em>.</li>
+                        <li>Select <strong>PCAN-USB</strong>, choose driver <strong>WinUSB</strong>, click <strong>Replace Driver</strong>.</li>
+                        <li>Unplug and re-plug the adapter, then click <strong>Connect</strong> above and choose PCAN-USB in Chrome.</li>
+                    </ol>
+                </div>
+
+                <div class="gateway-download">
+                    <div class="gateway-download-icon"></div>
+                    <h3>Zadig — USB driver installation made easy</h3>
+                    <p>
+                        Free Windows tool to install WinUSB / libusb drivers for USB devices
+                        so Chrome WebUSB can open your PCAN-USB adapter.
+                    </p>
+                    <span class="result-count">
+                        <a
+                            href="https://zadig.akeo.ie/"
+                            class="gateway-download-button"
+                            target="_blank"
+                            rel="noopener"
+                        >
+                            Open Zadig website
+                        </a>
+                    </span>
+                </div>
+            </div>
+
+            <p class="gateway-note">
+                Note: You can view this dashboard without Zadig.
+                Zadig is required only the first time you use PCAN-USB with Chrome on Windows.
+                To use PEAK tools (PCAN-View) again later, reinstall the PEAK driver.
+            </p>
+        </section>
+
+        <section class="panel">
+            <div class="panel-heading">
+                <div>
+                    <div class="section-kicker">DIAGNOSTICS</div>
+                    <h2>Activity log</h2>
+                </div>
+            </div>
+            <pre id="log" class="bc-log" style="margin: 0 24px 20px;"></pre>
+        </section>
+
+        <footer>
+            <span>EV CAN Monitoring Studio</span>
+            <span>Python · FastAPI · WebUSB · Web Serial</span>
+        </footer>
+    </main>
+</body>
+</html>
