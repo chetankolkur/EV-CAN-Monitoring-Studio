@@ -6,6 +6,8 @@ const DBC_API_URL = "https://ke76ricmk3.execute-api.ap-south-1.amazonaws.com/pro
 const DBC_PROXY_URL = "/api/dbc-file";
 const RAW_ROWS = 200;
 const STALE_MS = 3000;
+const MAX_SIGNAL_HISTORY = 120;
+const SIGNAL_CHART_HEIGHT = 190;
 
 const $ = (id) => document.getElementById(id);
 
@@ -18,6 +20,7 @@ const state = {
     uniqueIds: new Set(),
     signals: new Map(),
     signalCards: new Map(),
+    signalHistory: new Map(),
     rawBuffer: [],
     unmatchedIds: new Set(),
     firstUnmatchedFrame: null,
@@ -52,6 +55,7 @@ function useDbc(text, source) {
     state.dbc = dbc;
     state.signals.clear();
     state.signalCards.clear();
+    state.signalHistory.clear();
     state.firstUnmatchedFrame = null;
     $("signalGrid").innerHTML = '<div class="bc-empty">Waiting for decoded CAN frames…</div>';
     $("dbcInfo").textContent = `Loaded ${source}: ${dbc.messageCount} messages, ${dbc.signalCount} signals.`;
@@ -128,9 +132,22 @@ function handleFrame(frame) {
             messageName = message.name;
             state.decodedFrames++;
             for (const sig of decodeMessage(message, frame.data)) {
-                state.signals.set(`${message.name}.${sig.name}`, {
+                const key = `${message.name}.${sig.name}`;
+                const decoded = {
                     ...sig, message: message.name, canId, updatedAt: now
-                });
+                };
+                state.signals.set(key, decoded);
+                let history = state.signalHistory.get(key);
+                if (!history) {
+                    history = [];
+                    state.signalHistory.set(key, history);
+                }
+                if (typeof sig.value === "number" && Number.isFinite(sig.value)) {
+                    history.push({ time: now, value: sig.value });
+                    if (history.length > MAX_SIGNAL_HISTORY) {
+                        history.splice(0, history.length - MAX_SIGNAL_HISTORY);
+                    }
+                }
             }
         } else if (state.dbc.findById(frame.id)) {
             messageName = "CAN format mismatch";
@@ -177,6 +194,121 @@ function formatValue(sig) {
     return Number.isInteger(v) ? String(v) : v.toFixed(Math.abs(v) < 10 ? 3 : 2).replace(/\.?0+$/, "");
 }
 
+function formatAxisValue(value) {
+    if (Number.isInteger(value)) return String(value);
+    return Number(value.toPrecision(4)).toString();
+}
+
+function drawSignalChart(key, sig, canvas) {
+    const history = state.signalHistory.get(key) || [];
+    if (!history.length) return;
+
+    const rect = canvas.getBoundingClientRect();
+    if (!rect.width) return;
+
+    const dpr = window.devicePixelRatio || 1;
+    const width = rect.width;
+    const height = SIGNAL_CHART_HEIGHT;
+    canvas.width = Math.round(width * dpr);
+    canvas.height = Math.round(height * dpr);
+
+    const context = canvas.getContext("2d");
+    context.setTransform(dpr, 0, 0, dpr, 0, 0);
+    context.clearRect(0, 0, width, height);
+
+    const plot = { left: 58, right: width - 10, top: 10, bottom: height - 35 };
+    const plotWidth = plot.right - plot.left;
+    const plotHeight = plot.bottom - plot.top;
+    if (plotWidth <= 0 || plotHeight <= 0) return;
+
+    let min = Math.min(...history.map((point) => point.value));
+    let max = Math.max(...history.map((point) => point.value));
+    if (min === max) {
+        const pad = Math.abs(min) * 0.05 || 1;
+        min -= pad;
+        max += pad;
+    } else {
+        const pad = (max - min) * 0.08;
+        min -= pad;
+        max += pad;
+    }
+
+    context.font = "10px Inter, sans-serif";
+    context.textBaseline = "middle";
+    context.textAlign = "right";
+    context.lineWidth = 1;
+    for (let tick = 0; tick <= 4; tick++) {
+        const ratio = tick / 4;
+        const y = plot.bottom - ratio * plotHeight;
+        const value = min + ratio * (max - min);
+        context.strokeStyle = "#33393f";
+        context.beginPath();
+        context.moveTo(plot.left, y);
+        context.lineTo(plot.right, y);
+        context.stroke();
+        context.fillStyle = "#8a9199";
+        context.fillText(formatAxisValue(value), plot.left - 7, y);
+    }
+
+    const firstTime = history[0].time;
+    const lastTime = history[history.length - 1].time;
+    const timeSpan = lastTime - firstTime;
+    context.textAlign = "center";
+    context.textBaseline = "top";
+    context.fillStyle = "#8a9199";
+    for (let tick = 0; tick <= 2; tick++) {
+        const ratio = tick / 2;
+        const x = plot.left + ratio * plotWidth;
+        const pointTime = firstTime + ratio * timeSpan;
+        context.strokeStyle = "#33393f";
+        context.beginPath();
+        context.moveTo(x, plot.top);
+        context.lineTo(x, plot.bottom);
+        context.stroke();
+        context.fillText(
+            new Date(pointTime).toLocaleTimeString([], { hour12: false }),
+            x,
+            plot.bottom + 5
+        );
+    }
+
+    context.save();
+    context.translate(10, plot.top + plotHeight / 2);
+    context.rotate(-Math.PI / 2);
+    context.textAlign = "center";
+    context.textBaseline = "top";
+    context.fillStyle = "#8a9199";
+    context.fillText(sig.unit ? `Value (${sig.unit})` : "Value", 0, 0);
+    context.restore();
+
+    context.textAlign = "center";
+    context.textBaseline = "bottom";
+    context.fillStyle = "#8a9199";
+    context.fillText("Time", plot.left + plotWidth / 2, height - 1);
+
+    context.strokeStyle = "#e8a33d";
+    context.lineWidth = 2;
+    context.beginPath();
+    history.forEach((point, index) => {
+        const timeRatio = timeSpan
+            ? (point.time - firstTime) / timeSpan
+            : history.length > 1 ? index / (history.length - 1) : 0.5;
+        const x = plot.left + timeRatio * plotWidth;
+        const y = plot.bottom - ((point.value - min) / (max - min)) * plotHeight;
+        if (index === 0) context.moveTo(x, y);
+        else context.lineTo(x, y);
+    });
+    context.stroke();
+
+    if (history.length === 1) {
+        const y = plot.bottom - ((history[0].value - min) / (max - min)) * plotHeight;
+        context.fillStyle = "#e8a33d";
+        context.beginPath();
+        context.arc(plot.left + plotWidth / 2, y, 3, 0, Math.PI * 2);
+        context.fill();
+    }
+}
+
 function renderSignals() {
     const grid = $("signalGrid");
     const filter = $("signalSearch").value.trim().toLowerCase();
@@ -202,13 +334,25 @@ function renderSignals() {
         if (!card) {
             card = document.createElement("div");
             card.className = "bc-signal";
-            card.innerHTML = '<div class="name"></div><div class="value"></div>';
-            card.querySelector(".name").textContent = sig.name;
+            card.innerHTML =
+                '<button class="signal-toggle" type="button" aria-expanded="false">' +
+                '<span class="name"></span><span class="value"></span></button>' +
+                '<div class="signal-chart" hidden><canvas class="signal-chart-canvas"></canvas></div>';
+            const toggle = card.querySelector(".signal-toggle");
+            toggle.querySelector(".name").textContent = sig.name;
+            toggle.addEventListener("click", () => {
+                const chart = card.querySelector(".signal-chart");
+                chart.hidden = !chart.hidden;
+                toggle.setAttribute("aria-expanded", String(!chart.hidden));
+                if (!chart.hidden) {
+                    drawSignalChart(key, state.signals.get(key), chart.querySelector("canvas"));
+                }
+            });
             state.signalCards.set(key, card);
             const next = keys.slice(keys.indexOf(key) + 1).map((k) => state.signalCards.get(k)).find(Boolean);
             grid.insertBefore(card, next || null);
         }
-        const valueEl = card.querySelector(".value");
+        const valueEl = card.querySelector(".signal-toggle .value");
         valueEl.textContent = formatValue(sig);
         if (sig.unit) {
             const unit = document.createElement("small");
@@ -217,6 +361,8 @@ function renderSignals() {
         }
         card.classList.toggle("stale", now - sig.updatedAt > STALE_MS);
         card.hidden = filter && !key.toLowerCase().includes(filter);
+        const chart = card.querySelector(".signal-chart");
+        if (!chart.hidden) drawSignalChart(key, sig, chart.querySelector("canvas"));
     }
 }
 
