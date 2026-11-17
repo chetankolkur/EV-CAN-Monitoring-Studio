@@ -2,275 +2,212 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta name="theme-color" content="#0b1220">
-    <title>EV CAN | Monitoring Studio</title>
-    <link rel="stylesheet" href="/static/Style.css">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <meta name="theme-color" content="#15181b">
+    <title>E3 ELECTRIC.AI | Vehicle Diagnostics</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="/static/browser-can.css">
+    <link rel="stylesheet" href="/static/Style.css">
     <script type="module" src="/static/app.js"></script>
 </head>
 <body>
-    <aside class="sidebar">
-        <a class="brand e3-brand" href="/" aria-label="E3 ELECTRIC.AI home">
-            <img
-                src="/static/e3-electric-ai-logo.png"
-                alt="E3 ELECTRIC.AI — TRION"
-                class="e3-brand-logo"
-            >
-        </a>
-
-        <div class="nav-caption">WORKSPACE</div>
-        <nav>
-            <button class="nav-button active" type="button" data-view="dashboard">
-                <span class="nav-icon">▦</span> Live CAN Monitor
-            </button>
-        </nav>
-
-        <div class="sidebar-bottom">
-            <div class="sidebar-footnote">
-                LISTEN-ONLY MODE<br>
-                <span>No CAN messages transmitted</span>
-            </div>
-        </div>
-    </aside>
-
-    <main class="main-content">
-        <header class="topbar">
-            <div>
-                <div class="eyebrow">VEHICLE NETWORK / DIAGNOSTICS</div>
-                <h1 id="pageTitle">Browser CAN monitor</h1>
-                <p class="page-subtitle">
-                    Plug the CAN adapter into this laptop, load the DBC, and connect in Chrome.
-                    Everything runs in the browser — no PCAN Gateway required.
-                </p>
-            </div>
-            <div class="top-actions">
-                <div class="side-status header-device-status" id="statusBox">
-                    <span id="statusDot" class="status-dot bc-dot"></span>
-                    <div>
-                        <strong id="statusText">Adapter disconnected.</strong>
-                        <small>WebUSB / Web Serial</small>
+    <div class="shell">
+        <aside class="sidebar">
+            <a class="brand" href="/" aria-label="E3 ELECTRIC.AI home">
+                <img src="/static/e3-electric-ai-logo.png" alt="E3 ELECTRIC.AI" class="e3-brand-logo">
+                <span class="brand-sub">VEHICLE DIAGNOSTICS</span>
+            </a>
+            <nav class="nav" aria-label="Main navigation">
+                <button class="nav-item active" type="button" data-screen="dashboard">Dashboard</button>
+                <button class="nav-item" type="button" data-screen="ecu">ECU Tests</button>
+                <button class="nav-item" type="button" data-screen="live">Live Data</button>
+                <div class="nav-group">
+                    <button class="nav-item" id="vm-toggle" type="button" aria-expanded="true">Vehicle Management <span class="nav-caret open" id="vm-caret" aria-hidden="true">›</span></button>
+                    <div class="nav-sub open" id="vm-sub">
+                        <button class="nav-sub-item" type="button" data-screen="vm-repair">Repair &amp; maintenance</button>
+                        <button class="nav-sub-item" type="button" data-screen="vm-errors">Error code correction</button>
+                        <button class="nav-sub-item" type="button" data-screen="vm-software">Software update</button>
+                        <button class="nav-sub-item" type="button" data-screen="vm-parts">Part mapping</button>
                     </div>
                 </div>
-                <!-- Retained for compatibility with existing dashboard scripts -->
-                <span id="headerDot" class="mini-dot" hidden></span>
-                <span id="dbcText" hidden>Adapter idle</span>
+            </nav>
+            <div class="sidebar-foot">
+                <div class="tool-status"><span class="dot" id="sidebarStatusDot"></span><span id="canToolStatus">Adapter disconnected</span></div>
+                <div class="emp">LISTEN-ONLY MODE · No CAN messages transmitted</div>
             </div>
-        </header>
+        </aside>
 
-        <div class="bc-warning" id="browserWarning" hidden>
-            This browser does not support Web Serial / WebUSB. Use Google Chrome or Microsoft Edge on a desktop computer.
-        </div>
-
-        <section class="panel">
-            <div class="panel-heading">
+        <main class="main">
+            <header class="topbar">
                 <div>
-                    <div class="section-kicker">SETUP</div>
-                    <h2>1 · DBC file</h2>
-                    <p>Load the BMS DBC from the server or choose a local .dbc file.</p>
+                    <div class="page-title" id="page-title">Dashboard</div>
+                    <div class="page-crumb" id="page-crumb">Live vehicle overview</div>
                 </div>
-            </div>
-            <div class="bc-row" style="padding: 0 24px 20px;">
-                <label class="bc-file">
-                    <input type="file" id="dbcFile" accept=".dbc,text/plain">
-                    <span>Choose .dbc file</span>
-                </label>
-                <button id="dbcAwsBtn" class="bc-btn bc-btn-quiet" type="button">Load BMS DBC from server</button>
-            </div>
-            <p class="bc-muted" id="dbcInfo" style="padding: 0 24px 20px;">No DBC loaded.</p>
-        </section>
+                <div class="vehicle-chip">
+                    <div class="vc-field"><span class="vc-label">VEHICLE</span><span class="vc-value">Not identified</span></div>
+                    <div class="vc-divider"></div>
+                    <div class="vc-field"><span class="vc-label">CAN ADAPTER</span><span class="vc-value" id="statusText">Adapter disconnected.</span></div>
+                    <span id="statusDot" class="bc-dot"></span>
+                </div>
+            </header>
 
-        <section class="panel">
-            <div class="panel-heading">
-                <div>
-                    <div class="section-kicker">SETUP</div>
-                    <h2>2 · CAN adapter</h2>
-                    <p>Connect PEAK PCAN-USB (WebUSB), SLCAN, or use the simulator.</p>
-                </div>
-            </div>
-            <div class="bc-grid" style="padding: 0 24px;">
-                <label>Adapter
-                    <select id="transportSelect">
-                        <option value="pcan">PEAK PCAN-USB (WebUSB)</option>
-                        <option value="slcan">SLCAN / CANable / USBtin (Web Serial)</option>
-                        <option value="sim">Simulator (no hardware)</option>
-                    </select>
-                </label>
-                <label>Bitrate
-                    <select id="bitrateSelect">
-                        <option value="1000000">1 Mbit/s</option>
-                        <option value="800000">800 kbit/s</option>
-                        <option value="500000" selected>500 kbit/s</option>
-                        <option value="250000">250 kbit/s</option>
-                        <option value="125000">125 kbit/s</option>
-                        <option value="100000">100 kbit/s</option>
-                        <option value="50000">50 kbit/s</option>
-                        <option value="20000">20 kbit/s</option>
-                        <option value="10000">10 kbit/s</option>
-                    </select>
-                </label>
-                <label class="bc-check">
-                    <input type="checkbox" id="listenOnly" checked>
-                    Listen-only (never transmit / ACK)
-                </label>
-            </div>
-            <div class="bc-row" style="padding: 16px 24px 8px;">
-                <button id="connectBtn" class="bc-btn bc-btn-primary" type="button">Connect</button>
-                <button id="disconnectBtn" class="bc-btn" type="button" disabled>Disconnect</button>
-            </div>
-            <details class="bc-help" id="pcanHelp" style="margin: 0 24px 20px;">
-                <summary>First-time PCAN-USB setup on Windows (one time only)</summary>
-                <ol>
-                    <li>Chrome can only open the PCAN-USB if Windows uses the generic <strong>WinUSB</strong> driver, not PEAK's driver.</li>
-                    <li>Download <a href="https://zadig.akeo.ie/" target="_blank" rel="noopener">Zadig</a>, plug in the PCAN-USB, and run Zadig.</li>
-                    <li>Menu <em>Options → List All Devices</em>, select <em>PCAN-USB</em>, choose <strong>WinUSB</strong>, click <em>Replace Driver</em>.</li>
-                    <li>Re-plug the adapter, then click <em>Connect</em> here and pick the PCAN-USB in Chrome's popup.</li>
-                    <li>To use PEAK tools such as PCAN-View again, reinstall the PEAK driver from Device Manager.</li>
-                </ol>
-            </details>
-        </section>
-
-        <div class="metric-grid">
-            <article class="metric-card">
-                <div class="metric-top"><span>FRAMES RECEIVED</span><span class="metric-symbol">⌁</span></div>
-                <div class="metric-value" id="mFrames">0</div>
-                <div class="metric-foot">Total frames this session</div>
-            </article>
-            <article class="metric-card">
-                <div class="metric-top"><span>FRAMES / SECOND</span><span class="metric-symbol">↻</span></div>
-                <div class="metric-value" id="mRate">0</div>
-                <div class="metric-foot">Live receive rate</div>
-            </article>
-            <article class="metric-card">
-                <div class="metric-top"><span>UNIQUE CAN IDs</span><span class="metric-symbol">#</span></div>
-                <div class="metric-value" id="mIds">0</div>
-                <div class="metric-foot">Distinct IDs seen this session</div>
-            </article>
-            <article class="metric-card accent-card">
-                <div class="metric-top"><span>DBC-DECODED FRAMES</span><span class="metric-symbol">✓</span></div>
-                <div class="metric-value" id="mDecoded">0</div>
-                <div class="metric-foot">Matched against loaded DBC</div>
-            </article>
-        </div>
-
-        <section class="panel bms-panel">
-            <div class="panel-heading">
-                <div>
-                    <div class="section-kicker">BATTERY MANAGEMENT SYSTEM</div>
-                    <h2>Live decoded signals</h2>
-                    <p>Values extracted from received CAN frames using your DBC.</p>
-                </div>
-                <div class="bc-row">
-                    <input type="search" id="signalSearch" placeholder="Filter signals or messages…">
-                    <button id="recordBtn" class="bc-btn" type="button">● Start recording</button>
-                    <button id="exportBtn" class="bc-btn bc-btn-quiet" type="button" disabled>↓ Export CSV</button>
-                    <span class="bc-muted" id="recordInfo"></span>
-                </div>
-            </div>
-            <div id="signalGrid" class="bms-signal-grid bc-signal-grid">
-                <div class="signal-empty bc-empty">Waiting for decoded CAN frames…</div>
-            </div>
-        </section>
-
-        <section class="panel">
-            <div class="panel-heading">
-                <div>
-                    <div class="section-kicker">CAPTURE STREAM</div>
-                    <h2>Raw CAN frames</h2>
-                    <p>Raw payload and decoded message names side by side.</p>
-                </div>
-                <div class="bc-row">
-                    <label class="bc-check"><input type="checkbox" id="onlyDbc" checked> Only DBC messages</label>
-                    <span class="bc-muted" id="unmatchedInfo"></span>
-                    <label class="bc-check"><input type="checkbox" id="pauseRaw"> Pause</label>
-                    <button id="clearBtn" class="bc-btn bc-btn-quiet" type="button">Clear</button>
-                </div>
-            </div>
-            <div class="table-wrapper">
-                <table class="wide-table">
-                    <thead>
-                        <tr>
-                            <th>Time</th>
-                            <th>CAN ID</th>
-                            <th>Fmt</th>
-                            <th>DLC</th>
-                            <th>Data (hex)</th>
-                            <th>Message</th>
-                        </tr>
-                    </thead>
-                    <tbody id="rawTable">
-                        <tr><td colspan="6" class="empty bc-empty">No frames yet. Connect the adapter to see live data.</td></tr>
-                    </tbody>
-                </table>
-            </div>
-        </section>
-
-        <section class="panel gateway-panel">
-            <div class="panel-heading">
-                <div>
-                    <div class="section-kicker">HARDWARE CONNECTION</div>
-                    <h2>Zadig — USB driver installation made easy</h2>
-                    <p>
-                        For PCAN-USB in Chrome (WebUSB), Windows must use the generic
-                        <strong>WinUSB</strong> driver. Zadig installs that driver in one step.
-                    </p>
-                </div>
-                <span class="result-count">Windows</span>
-            </div>
-
-            <div class="gateway-content">
-                <div class="gateway-info">
-                    <h3>How to install WinUSB with Zadig</h3>
-                    <ol>
-                        <li>Download Zadig from the official site (portable — no install required).</li>
-                        <li>Plug in your PCAN-USB adapter.</li>
-                        <li>Open Zadig → <em>Options → List All Devices</em>.</li>
-                        <li>Select <strong>PCAN-USB</strong>, choose driver <strong>WinUSB</strong>, click <strong>Replace Driver</strong>.</li>
-                        <li>Unplug and re-plug the adapter, then click <strong>Connect</strong> above and choose PCAN-USB in Chrome.</li>
-                    </ol>
+            <div class="content">
+                <div class="bc-warning" id="browserWarning" hidden>
+                    This browser does not support Web Serial / WebUSB. Use Google Chrome or Microsoft Edge on a desktop computer.
                 </div>
 
-                <div class="gateway-download">
-                    <div class="gateway-download-icon"></div>
-                    <h3>Zadig — USB driver installation made easy</h3>
-                    <p>
-                        Free Windows tool to install WinUSB / libusb drivers for USB devices
-                        so Chrome WebUSB can open your PCAN-USB adapter.
-                    </p>
-                    <span class="result-count">
-                        <a
-                            href="https://zadig.akeo.ie/"
-                            class="gateway-download-button"
-                            target="_blank"
-                            rel="noopener"
-                        >
-                            Open Zadig website
-                        </a>
-                    </span>
-                </div>
+                <section class="screen active" id="screen-dashboard">
+                    <div class="banner info">
+                        <div class="banner-left">
+                            <span class="banner-symbol" aria-hidden="true">i</span>
+                            <div>
+                                <div class="banner-title">Connect to a vehicle to view live CAN data</div>
+                                <div class="section-note">Vehicle identity, diagnostic trouble codes, ECU tests, firmware and parts data are not provided by the current backend.</div>
+                            </div>
+                        </div>
+                        <button class="btn sm" type="button" data-screen="live">Open Live Data</button>
+                    </div>
+
+                    <div class="section">
+                        <div class="section-head">
+                            <div class="section-title"><span class="bar"></span>CAN session</div>
+                            <div class="section-note">Values below update from frames received by this browser.</div>
+                        </div>
+                        <div class="stat-grid">
+                            <div class="stat"><div class="stat-label">Frames received</div><div class="stat-value" id="mFrames">0</div></div>
+                            <div class="stat"><div class="stat-label">Frames / second</div><div class="stat-value" id="mRate">0</div></div>
+                            <div class="stat"><div class="stat-label">Unique CAN IDs</div><div class="stat-value" id="mIds">0</div></div>
+                            <div class="stat"><div class="stat-label">DBC-decoded frames</div><div class="stat-value" id="mDecoded">0</div></div>
+                        </div>
+                    </div>
+
+                    <div class="section">
+                        <div class="section-head"><div class="section-title"><span class="bar"></span>Connection setup</div></div>
+                        <section class="panel setup-panel">
+                            <div class="panel-heading">
+                                <div><div class="section-kicker">SETUP · DBC</div><h2>Load signal definitions</h2><p>Use the existing server DBC proxy or choose a local DBC file.</p></div>
+                            </div>
+                            <div class="bc-row">
+                                <label class="bc-file"><input type="file" id="dbcFile" accept=".dbc,text/plain"><span>Choose .dbc file</span></label>
+                                <button id="dbcAwsBtn" class="btn" type="button">Load BMS DBC from server</button>
+                            </div>
+                            <p class="bc-muted" id="dbcInfo">No DBC loaded.</p>
+                        </section>
+
+                        <section class="panel setup-panel">
+                            <div class="panel-heading">
+                                <div><div class="section-kicker">SETUP · ADAPTER</div><h2>Connect CAN adapter</h2><p>PCAN-USB via WebUSB, SLCAN via Web Serial, or an explicitly marked simulator.</p></div>
+                            </div>
+                            <div class="bc-grid">
+                                <label>Adapter
+                                    <select id="transportSelect">
+                                        <option value="pcan">PEAK PCAN-USB (WebUSB)</option>
+                                        <option value="slcan">SLCAN / CANable / USBtin (Web Serial)</option>
+                                        <option value="sim">Simulator (synthetic data only)</option>
+                                    </select>
+                                </label>
+                                <label>Bitrate
+                                    <select id="bitrateSelect">
+                                        <option value="1000000">1 Mbit/s</option><option value="800000">800 kbit/s</option>
+                                        <option value="500000" selected>500 kbit/s</option><option value="250000">250 kbit/s</option>
+                                        <option value="125000">125 kbit/s</option><option value="100000">100 kbit/s</option>
+                                        <option value="50000">50 kbit/s</option><option value="20000">20 kbit/s</option>
+                                        <option value="10000">10 kbit/s</option>
+                                    </select>
+                                </label>
+                                <label class="bc-check"><input type="checkbox" id="listenOnly" checked> Listen-only (never transmit / ACK)</label>
+                            </div>
+                            <p class="transport-notice" id="transportNotice" hidden>Simulator mode generates synthetic CAN frames for interface testing; these are not vehicle readings.</p>
+                            <div class="bc-row setup-actions">
+                                <button id="connectBtn" class="btn primary" type="button">Connect</button>
+                                <button id="disconnectBtn" class="btn" type="button" disabled>Disconnect</button>
+                            </div>
+                            <details class="bc-help" id="pcanHelp">
+                                <summary>First-time PCAN-USB setup on Windows</summary>
+                                <ol>
+                                    <li>Chrome requires the generic WinUSB driver for PCAN-USB.</li>
+                                    <li>Use <a href="https://zadig.akeo.ie/" target="_blank" rel="noopener">Zadig</a> to select PCAN-USB and install WinUSB, then reconnect the adapter.</li>
+                                    <li>Click Connect and choose the adapter in Chrome's device prompt.</li>
+                                </ol>
+                            </details>
+                        </section>
+                    </div>
+
+                    <div class="section">
+                        <div class="section-head"><div class="section-title"><span class="bar"></span>Diagnostic capabilities</div></div>
+                        <div class="shortcut-grid">
+                            <button class="shortcut" type="button" data-screen="ecu"><span class="shortcut-title">ECU Tests</span><span class="shortcut-desc">Unavailable: no ECU test API is configured.</span></button>
+                            <button class="shortcut" type="button" data-screen="vm-errors"><span class="shortcut-title">Error codes</span><span class="shortcut-desc">Unavailable: no vehicle DTC API is configured.</span></button>
+                            <button class="shortcut" type="button" data-screen="vm-software"><span class="shortcut-title">Software update</span><span class="shortcut-desc">Unavailable: no firmware inventory or flashing API is configured.</span></button>
+                        </div>
+                    </div>
+                </section>
+
+                <section class="screen" id="screen-ecu">
+                    <div class="section">
+                        <div class="section-head"><div class="section-title"><span class="bar"></span>ECU Tests</div></div>
+                        <div class="panel unavailable-panel"><span class="pill idle">Unavailable</span><h2>No ECU test backend is configured</h2><p>The current FastAPI application provides the dashboard and DBC file only. No ECU test endpoint or test procedure is available, so this screen will not report simulated results.</p></div>
+                    </div>
+                </section>
+
+                <section class="screen" id="screen-live">
+                    <div class="section">
+                        <div class="section-head">
+                            <div><div class="section-title"><span class="bar"></span>Live decoded signals</div><div class="section-note">Actual values decoded from received CAN frames and the loaded DBC.</div></div>
+                            <div class="bc-row">
+                                <input type="search" id="signalSearch" placeholder="Filter signals or messages…">
+                                <button id="recordBtn" class="btn" type="button">● Start recording</button>
+                                <button id="exportBtn" class="btn ghost" type="button" disabled>↓ Export CSV</button>
+                                <span class="bc-muted" id="recordInfo"></span>
+                            </div>
+                        </div>
+                        <div id="signalGrid" class="bc-signal-grid"><div class="bc-empty">Load a DBC and connect an adapter to view live signals.</div></div>
+                    </div>
+                    <div class="section">
+                        <div class="section-head">
+                            <div><div class="section-title"><span class="bar"></span>Raw CAN frames</div><div class="section-note">Received frames; no messages are transmitted.</div></div>
+                            <div class="bc-row">
+                                <label class="bc-check"><input type="checkbox" id="onlyDbc" checked> Only DBC messages</label>
+                                <span class="bc-muted" id="unmatchedInfo"></span>
+                                <label class="bc-check"><input type="checkbox" id="pauseRaw"> Pause</label>
+                                <button id="clearBtn" class="btn ghost sm" type="button">Clear</button>
+                            </div>
+                        </div>
+                        <div class="bc-table-wrap">
+                            <table>
+                                <thead><tr><th>Time</th><th>CAN ID</th><th>Fmt</th><th>DLC</th><th>Data (hex)</th><th>Message</th></tr></thead>
+                                <tbody id="rawTable"><tr><td colspan="6" class="bc-empty">No frames yet. Connect an adapter to see live data.</td></tr></tbody>
+                            </table>
+                        </div>
+                    </div>
+                </section>
+
+                <section class="screen" id="screen-vm-repair">
+                    <div class="section"><div class="section-head"><div class="section-title"><span class="bar"></span>Repair &amp; maintenance</div></div>
+                        <div class="panel unavailable-panel"><span class="pill idle">Unavailable</span><h2>No repair workflow is configured</h2><p>The current backend has no repair checklist or S.I.V.A diagnosis service. This placeholder does not provide diagnostic instructions or record repair outcomes.</p></div>
+                    </div>
+                </section>
+                <section class="screen" id="screen-vm-errors">
+                    <div class="section"><div class="section-head"><div class="section-title"><span class="bar"></span>Error code correction</div></div>
+                        <div class="panel unavailable-panel"><span class="pill idle">Unavailable</span><h2>No vehicle DTC data is available</h2><p>The DBC endpoint supplies signal definitions only. No fault-code retrieval, history, diagnosis, or report API exists in the current backend.</p></div>
+                    </div>
+                </section>
+                <section class="screen" id="screen-vm-software">
+                    <div class="section"><div class="section-head"><div class="section-title"><span class="bar"></span>Software update</div></div>
+                        <div class="panel unavailable-panel"><span class="pill idle">Unavailable</span><h2>Firmware updates are not configured</h2><p>No firmware inventory, update manifest, authorization, or flashing endpoint exists. No update action is available.</p></div>
+                    </div>
+                </section>
+                <section class="screen" id="screen-vm-parts">
+                    <div class="section"><div class="section-head"><div class="section-title"><span class="bar"></span>Part mapping</div></div>
+                        <div class="panel unavailable-panel"><span class="pill idle">Unavailable</span><h2>Parts catalogue integration is not configured</h2><p>No component compatibility, serial-number validation, or vehicle parts mapping API exists in the current backend.</p></div>
+                    </div>
+                </section>
+
+                <footer class="footnote"><span>E3 ELECTRIC.AI · Vehicle Diagnostics</span><span>FastAPI · WebUSB · Web Serial</span></footer>
             </div>
-
-            <p class="gateway-note">
-                Note: You can view this dashboard without Zadig.
-                Zadig is required only the first time you use PCAN-USB with Chrome on Windows.
-                To use PEAK tools (PCAN-View) again later, reinstall the PEAK driver.
-            </p>
-        </section>
-
-        <section class="panel">
-            <div class="panel-heading">
-                <div>
-                    <div class="section-kicker">DIAGNOSTICS</div>
-                    <h2>Activity log</h2>
-                </div>
-            </div>
-            <pre id="log" class="bc-log" style="margin: 0 24px 20px;"></pre>
-        </section>
-
-        <footer>
-            <span>EV CAN Monitoring Studio</span>
-            <span>Python · FastAPI · WebUSB · Web Serial</span>
-        </footer>
-    </main>
+        </main>
+    </div>
 </body>
 </html>

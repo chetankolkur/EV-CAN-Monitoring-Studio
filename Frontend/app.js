@@ -20,6 +20,7 @@ const state = {
     signalCards: new Map(),
     rawBuffer: [],
     unmatchedIds: new Set(),
+    firstUnmatchedFrame: null,
     rawDirty: false,
     recording: false,
     recordRows: [],
@@ -28,16 +29,20 @@ const state = {
 
 // ---------------------------------------------------------------- logging
 function log(text) {
-    const el = $("log");
     const stamp = new Date().toLocaleTimeString();
-    el.textContent += `[${stamp}] ${text}\n`;
-    el.scrollTop = el.scrollHeight;
+    console.debug(`[${stamp}] ${text}`);
 }
 
 function setStatus(text, level = "idle") {
     $("statusText").textContent = text;
     $("statusDot").className = `bc-dot ${level}`;
+    updateSidebarStatus(text, level);
     log(text);
+}
+
+function updateSidebarStatus(text, level = "idle") {
+    $("canToolStatus").textContent = text;
+    $("sidebarStatusDot").className = `dot ${level === "ok" ? "connected" : level === "error" ? "error" : ""}`;
 }
 
 // ---------------------------------------------------------------- DBC
@@ -47,6 +52,7 @@ function useDbc(text, source) {
     state.dbc = dbc;
     state.signals.clear();
     state.signalCards.clear();
+    state.firstUnmatchedFrame = null;
     $("signalGrid").innerHTML = '<div class="bc-empty">Waiting for decoded CAN frames…</div>';
     $("dbcInfo").textContent = `Loaded ${source}: ${dbc.messageCount} messages, ${dbc.signalCount} signals.`;
     log(`DBC loaded from ${source}: ${dbc.messageCount} messages, ${dbc.signalCount} signals.`);
@@ -137,7 +143,12 @@ function handleFrame(frame) {
         messageName !== "DBC not loaded" &&
         messageName !== "CAN format mismatch";
 
-    if (!matched) state.unmatchedIds.add(canId);
+    if (!matched) {
+        state.unmatchedIds.add(canId);
+        if (state.dbc && !state.firstUnmatchedFrame) {
+            state.firstUnmatchedFrame = { canId, extended: frame.extended, messageName };
+        }
+    }
 
     // Record exactly once for each successfully matched DBC frame.
     if (state.recording && matched) {
@@ -172,6 +183,17 @@ function renderSignals() {
     const now = Date.now();
 
     if (state.signals.size && grid.querySelector(".bc-empty")) grid.innerHTML = "";
+    if (!state.signals.size && state.firstUnmatchedFrame) {
+        const { canId, extended, messageName } = state.firstUnmatchedFrame;
+        const reason = messageName === "CAN format mismatch"
+            ? "this ID is in the DBC but its standard/extended format differs"
+            : "this ID is not in the DBC";
+        const hint = grid.querySelector(".bc-empty");
+        if (hint) {
+            hint.textContent =
+                `CAN frames are arriving, but none match the loaded DBC. First unmatched: ${canId} ${extended ? "EXT" : "STD"} — ${reason}. Check that the adapter is connected to the BMS CAN bus and that its bitrate matches the vehicle.`;
+        }
+    }
 
     const keys = [...state.signals.keys()].sort();
     for (const key of keys) {
@@ -180,9 +202,8 @@ function renderSignals() {
         if (!card) {
             card = document.createElement("div");
             card.className = "bc-signal";
-            card.innerHTML = '<div class="name"></div><div class="msg"></div><div class="value"></div>';
+            card.innerHTML = '<div class="name"></div><div class="value"></div>';
             card.querySelector(".name").textContent = sig.name;
-            card.querySelector(".msg").textContent = `${sig.message} · ${sig.canId}`;
             state.signalCards.set(key, card);
             const next = keys.slice(keys.indexOf(key) + 1).map((k) => state.signalCards.get(k)).find(Boolean);
             grid.insertBefore(card, next || null);
@@ -243,11 +264,15 @@ setInterval(() => {
     $("mRate").textContent = state.framesThisSecond;
     state.framesThisSecond = 0;
     if (state.transport && state.lastFrameAt && Date.now() - state.lastFrameAt > STALE_MS) {
-        $("statusText").textContent = "Connected · no CAN traffic for 3 s (check bus power, wiring, bitrate)";
+        const text = "Connected · no CAN traffic for 3 s (check bus power, wiring, bitrate)";
+        $("statusText").textContent = text;
         $("statusDot").className = "bc-dot warn";
+        updateSidebarStatus(text, "warn");
     } else if (state.transport && state.lastFrameAt) {
-        $("statusText").textContent = "Connected · receiving CAN frames";
+        const text = "Connected · receiving CAN frames";
+        $("statusText").textContent = text;
         $("statusDot").className = "bc-dot ok";
+        updateSidebarStatus(text, "ok");
     }
 }, 1000);
 
@@ -318,6 +343,7 @@ $("connectBtn").addEventListener("click", connect);
 $("disconnectBtn").addEventListener("click", disconnect);
 $("transportSelect").addEventListener("change", () => {
     $("pcanHelp").hidden = $("transportSelect").value !== "pcan";
+    $("transportNotice").hidden = $("transportSelect").value !== "sim";
 });
 
 // ---------------------------------------------------------------- recording
@@ -389,3 +415,39 @@ if (!window.isSecureContext) {
     log("Warning: this page must be opened over https:// or http://localhost for USB/Serial access.");
 }
 log("Ready. Load a DBC file, choose the adapter and click Connect.");
+
+const screenTitles = {
+    dashboard: ["Dashboard", "Live vehicle overview"],
+    ecu: ["ECU Tests", "Test services unavailable"],
+    live: ["Live Data", "Real-time values decoded from received CAN frames"],
+    "vm-repair": ["Repair & Maintenance", "Repair workflow unavailable"],
+    "vm-errors": ["Error Code Correction", "Vehicle DTC service unavailable"],
+    "vm-software": ["Software Update", "Firmware service unavailable"],
+    "vm-parts": ["Part Mapping", "Parts catalogue service unavailable"]
+};
+
+function goScreen(id) {
+    const title = screenTitles[id];
+    if (!title) return;
+    document.querySelectorAll(".screen").forEach((screen) => {
+        screen.classList.toggle("active", screen.id === `screen-${id}`);
+    });
+    document.querySelectorAll(".nav-item[data-screen], .nav-sub-item[data-screen]").forEach((item) => {
+        item.classList.toggle("active", item.dataset.screen === id);
+    });
+    $("page-title").textContent = title[0];
+    $("page-crumb").textContent = title[1];
+    document.querySelector(".content").scrollTop = 0;
+}
+
+document.querySelectorAll("[data-screen]").forEach((item) => {
+    item.addEventListener("click", () => goScreen(item.dataset.screen));
+});
+
+$("vm-toggle").addEventListener("click", () => {
+    const open = $("vm-sub").classList.toggle("open");
+    $("vm-caret").classList.toggle("open", open);
+    $("vm-toggle").setAttribute("aria-expanded", String(open));
+});
+
+updateSidebarStatus("Adapter disconnected.", "idle");

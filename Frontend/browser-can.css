@@ -167,18 +167,6 @@ th { position: sticky; top: 0; background: #f8faff; color: var(--muted); font-si
 td.mono { font-family: Consolas, "Courier New", monospace; }
 td.unmatched { color: var(--amber); }
 
-.bc-log {
-    max-height: 200px;
-    overflow: auto;
-    margin: 0;
-    padding: 12px;
-    border-radius: 12px;
-    background: #0b1220;
-    color: #c9d5ec;
-    font-size: 12px;
-    white-space: pre-wrap;
-}
-
 @media (max-width: 900px) {
     .bc-main { grid-template-columns: 1fr; padding: 16px; }
     .bc-metrics { grid-template-columns: repeat(2, 1fr); }
