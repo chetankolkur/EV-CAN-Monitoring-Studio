@@ -7,7 +7,7 @@ const DBC_PROXY_URL = "/api/dbc-file";
 const RAW_ROWS = 200;
 const STALE_MS = 3000;
 const MAX_SIGNAL_HISTORY = 120;
-const SIGNAL_PLOT_LANE_HEIGHT = 158;
+const SIGNAL_CHART_HEIGHT = 340;
 
 const $ = (id) => document.getElementById(id);
 
@@ -21,9 +21,6 @@ const state = {
     signals: new Map(),
     signalRows: new Map(),
     signalHistory: new Map(),
-    selectedSignals: new Set(),
-    confirmedSignals: new Set(),
-    plottedSignals: new Set(),
     ecuTestResults: new Map(),
     rawBuffer: [],
     unmatchedIds: new Set(),
@@ -62,18 +59,9 @@ function useDbc(text, source) {
     state.signals.clear();
     state.signalRows.clear();
     state.signalHistory.clear();
-    state.selectedSignals.clear();
-    state.confirmedSignals.clear();
-    state.plottedSignals.clear();
     state.ecuTestResults.clear();
     state.firstUnmatchedFrame = null;
     $("signalGrid").innerHTML = '<div class="bc-empty">Waiting for decoded CAN frames…</div>';
-    $("signalPlotEmpty").textContent = "Confirm one or more signals, then plot them here.";
-    $("signalPlotEmpty").hidden = false;
-    $("signalPlotScroll").hidden = true;
-    $("confirmSignalsBtn").disabled = true;
-    $("plotSignalsBtn").disabled = true;
-    $("signalSelectionInfo").textContent = "Select signals, then press OK.";
     $("dbcInfo").textContent = `Loaded ${source}: ${dbc.messageCount} messages, ${dbc.signalCount} signals.`;
     log(`DBC loaded from ${source}: ${dbc.messageCount} messages, ${dbc.signalCount} signals.`);
     renderEcuTests();
@@ -471,44 +459,15 @@ function formatAxisValue(value) {
     return Number(value.toPrecision(4)).toString();
 }
 
-function updateSignalSelectionControls() {
-    $("confirmSignalsBtn").disabled = state.selectedSignals.size === 0;
-    $("plotSignalsBtn").disabled = state.confirmedSignals.size === 0;
-    $("signalSelectionInfo").textContent = state.confirmedSignals.size
-        ? `${state.confirmedSignals.size} signal${state.confirmedSignals.size === 1 ? "" : "s"} confirmed.`
-        : state.selectedSignals.size
-            ? `${state.selectedSignals.size} selected; press OK to confirm.`
-            : "Select signals, then press OK.";
-}
-
-function confirmSignalSelection() {
-    state.confirmedSignals = new Set(state.selectedSignals);
-    updateSignalSelectionControls();
-}
-
-function plotConfirmedSignals() {
-    if (!state.confirmedSignals.size) return;
-    state.plottedSignals = new Set(state.confirmedSignals);
-    $("signalPlotEmpty").hidden = true;
-    $("signalPlotScroll").hidden = false;
-    drawSignalChart();
-}
-
-function drawSignalChart() {
-    const canvas = $("signalPlotCanvas");
-    const signals = [...state.plottedSignals]
-        .map((key) => ({ key, sig: state.signals.get(key), history: state.signalHistory.get(key) || [] }))
-        .filter((entry) => entry.sig && entry.history.length);
-    if (!signals.length || $("signalPlotScroll").hidden) return;
+function drawSignalChart(key, canvas) {
+    const sig = state.signals.get(key);
+    const history = state.signalHistory.get(key) || [];
+    if (!sig || !history.length || canvas.closest(".signal-chart-row").hidden) return;
 
     const width = canvas.clientWidth;
     if (!width) return;
 
-    const margin = { left: 94, right: 24, top: 18, bottom: 38 };
-    const laneHeight = SIGNAL_PLOT_LANE_HEIGHT;
-    const height = margin.top + signals.length * laneHeight + margin.bottom;
-    canvas.style.height = `${height}px`;
-
+    const height = SIGNAL_CHART_HEIGHT;
     const dpr = window.devicePixelRatio || 1;
     canvas.width = Math.round(width * dpr);
     canvas.height = Math.round(height * dpr);
@@ -516,90 +475,73 @@ function drawSignalChart() {
     context.setTransform(dpr, 0, 0, dpr, 0, 0);
     context.clearRect(0, 0, width, height);
 
-    const plot = { left: margin.left, right: width - margin.right };
+    const margin = { left: 88, right: 24, top: 48, bottom: 42 };
+    const plot = { left: margin.left, right: width - margin.right, top: margin.top, bottom: height - margin.bottom };
     const plotWidth = plot.right - plot.left;
-    if (plotWidth <= 0) return;
+    const plotHeight = plot.bottom - plot.top;
+    if (plotWidth <= 0 || plotHeight <= 0) return;
 
-    const firstTime = Math.min(...signals.map(({ history }) => history[0].time));
-    const lastTime = Math.max(...signals.map(({ history }) => history[history.length - 1].time));
+    const firstTime = history[0].time;
+    const lastTime = history[history.length - 1].time;
     const timeSpan = lastTime - firstTime;
-    const colors = ["#e8a33d", "#4b9fe1", "#45b26b", "#d56ae8", "#e36c64", "#58c9c4"];
-    const timeAxisTop = margin.top + signals.length * laneHeight - 20;
-
-    context.lineWidth = 1;
-    for (let tick = 0; tick <= 4; tick++) {
-        const x = plot.left + (tick / 4) * plotWidth;
-        context.strokeStyle = "#33393f";
-        context.beginPath();
-        context.moveTo(x, margin.top + 10);
-        context.lineTo(x, timeAxisTop);
-        context.stroke();
-    }
+    let min = Math.min(...history.map((point) => point.value));
+    let max = Math.max(...history.map((point) => point.value));
+    const padding = min === max ? Math.abs(min) * 0.05 || 1 : (max - min) * 0.08;
+    min -= padding;
+    max += padding;
 
     context.font = "12px Inter, sans-serif";
     context.textBaseline = "middle";
-    signals.forEach(({ key, sig, history }, index) => {
-        const laneTop = margin.top + index * laneHeight;
-        const plotTop = laneTop + 34;
-        const plotBottom = laneTop + laneHeight - 22;
-        const plotHeight = plotBottom - plotTop;
-        const color = colors[index % colors.length];
-        let min = Math.min(...history.map((point) => point.value));
-        let max = Math.max(...history.map((point) => point.value));
-        const padding = min === max ? Math.abs(min) * 0.05 || 1 : (max - min) * 0.08;
-        min -= padding;
-        max += padding;
+    context.textAlign = "left";
+    context.fillStyle = "#e7e9ea";
+    context.fillText(`Graph View · ${sig.name}`, 16, 17);
+    context.fillStyle = "#e8a33d";
+    context.font = "600 13px Inter, sans-serif";
+    context.fillText(`${formatValue(sig)}${sig.unit ? ` ${sig.unit}` : ""}`, 16, 36);
 
-        context.fillStyle = color;
-        context.fillRect(plot.left, laneTop + 9, 8, 8);
-        context.textAlign = "left";
-        context.fillStyle = "#e7e9ea";
-        const currentValue = `${formatValue(sig)}${sig.unit ? ` ${sig.unit}` : ""}`;
-        context.fillText(`${sig.name}  ·  ${currentValue}`, plot.left + 15, laneTop + 13, Math.max(50, plotWidth - 20));
-
-        context.lineWidth = 1;
-        context.textAlign = "right";
-        for (let tick = 0; tick <= 2; tick++) {
-            const ratio = tick / 2;
-            const y = plotBottom - ratio * plotHeight;
-            context.strokeStyle = "#33393f";
-            context.beginPath();
-            context.moveTo(plot.left, y);
-            context.lineTo(plot.right, y);
-            context.stroke();
-            context.fillStyle = "#8a9199";
-            context.fillText(formatAxisValue(min + ratio * (max - min)), plot.left - 8, y);
-        }
-        context.save();
-        context.translate(12, plotTop + plotHeight / 2);
-        context.rotate(-Math.PI / 2);
-        context.textAlign = "center";
-        context.fillStyle = "#8a9199";
-        context.fillText(sig.unit ? `Value (${sig.unit})` : "Value", 0, 0);
-        context.restore();
-
-        context.strokeStyle = color;
-        context.lineWidth = 2;
+    context.lineWidth = 1;
+    context.textAlign = "right";
+    for (let tick = 0; tick <= 4; tick++) {
+        const ratio = tick / 4;
+        const y = plot.bottom - ratio * plotHeight;
+        context.strokeStyle = "#33393f";
         context.beginPath();
-        history.forEach((point, pointIndex) => {
-            const ratio = timeSpan
-                ? (point.time - firstTime) / timeSpan
-                : history.length > 1 ? pointIndex / (history.length - 1) : 0.5;
-            const x = plot.left + ratio * plotWidth;
-            const y = plotBottom - ((point.value - min) / (max - min)) * plotHeight;
-            if (pointIndex === 0) context.moveTo(x, y);
-            else context.lineTo(x, y);
-        });
+        context.moveTo(plot.left, y);
+        context.lineTo(plot.right, y);
         context.stroke();
+        context.fillStyle = "#8a9199";
+        context.fillText(formatAxisValue(min + ratio * (max - min)), plot.left - 8, y);
+    }
 
-        if (index < signals.length - 1) {
-            context.strokeStyle = "#282d32";
-            context.beginPath();
-            context.moveTo(0, laneTop + laneHeight - 1);
-            context.lineTo(width, laneTop + laneHeight - 1);
-            context.stroke();
-        }
+    context.save();
+    context.translate(14, plot.top + plotHeight / 2);
+    context.rotate(-Math.PI / 2);
+    context.textAlign = "center";
+    context.fillStyle = "#8a9199";
+    context.fillText(sig.unit ? `Value (${sig.unit})` : "Value", 0, 0);
+    context.restore();
+
+    context.strokeStyle = "#e8a33d";
+    context.lineWidth = 2;
+    context.beginPath();
+    history.forEach((point, index) => {
+        const ratio = timeSpan
+            ? (point.time - firstTime) / timeSpan
+            : history.length > 1 ? index / (history.length - 1) : 0.5;
+        const x = plot.left + ratio * plotWidth;
+        const y = plot.bottom - ((point.value - min) / (max - min)) * plotHeight;
+        if (index === 0) context.moveTo(x, y);
+        else context.lineTo(x, y);
     });
+    context.stroke();
+
+    if (history.length === 1) {
+        const y = plot.bottom - ((history[0].value - min) / (max - min)) * plotHeight;
+        context.fillStyle = "#e8a33d";
+        context.beginPath();
+        context.arc(plot.left + plotWidth / 2, y, 4, 0, Math.PI * 2);
+        context.fill();
+    }
 
     context.font = "11px Inter, sans-serif";
     context.textAlign = "center";
@@ -609,9 +551,14 @@ function drawSignalChart() {
         const ratio = tick / 4;
         const x = plot.left + ratio * plotWidth;
         const time = firstTime + ratio * timeSpan;
-        context.fillText(new Date(time).toLocaleTimeString([], { hour12: false }), x, timeAxisTop + 4);
+        context.strokeStyle = "#33393f";
+        context.beginPath();
+        context.moveTo(x, plot.top);
+        context.lineTo(x, plot.bottom);
+        context.stroke();
+        context.fillText(new Date(time).toLocaleTimeString([], { hour12: false }), x, plot.bottom + 7);
     }
-    context.fillText("Time", plot.left + plotWidth / 2, height - 15);
+    context.fillText("Time", plot.left + plotWidth / 2, height - 14);
 }
 
 function formatSignalRange(sig) {
@@ -641,47 +588,82 @@ function renderSignals() {
     if (keys.length && grid.querySelector(".bc-empty")) {
         grid.innerHTML =
             '<table class="signal-table"><thead><tr>' +
-            '<th scope="col">Select</th><th scope="col">Signal</th><th scope="col">Value</th>' +
+            '<th scope="col">Graph View</th><th scope="col">Signal</th><th scope="col">Value</th>' +
             '<th scope="col" title="Limits defined in the DBC; not diagnostic safety thresholds.">Threshold / DBC range</th>' +
             '</tr></thead><tbody></tbody></table>';
     }
     const body = grid.querySelector(".signal-table tbody");
     for (const key of keys) {
         const sig = state.signals.get(key);
-        let row = state.signalRows.get(key);
-        if (!row) {
-            row = document.createElement("tr");
+        let signalRow = state.signalRows.get(key);
+        if (!signalRow) {
+            const row = document.createElement("tr");
             row.className = "signal-table-row";
             row.dataset.signalKey = key;
-            const selectCell = document.createElement("td");
-            const checkbox = document.createElement("input");
-            checkbox.type = "checkbox";
-            checkbox.className = "signal-select";
-            checkbox.setAttribute("aria-label", `Select ${sig.name} for plotting`);
-            checkbox.addEventListener("change", () => {
-                if (checkbox.checked) state.selectedSignals.add(key);
-                else state.selectedSignals.delete(key);
-                updateSignalSelectionControls();
-            });
-            selectCell.appendChild(checkbox);
-            row.appendChild(selectCell);
+            const graphCell = document.createElement("td");
+            const graphButton = document.createElement("button");
+            graphButton.type = "button";
+            graphButton.className = "btn ghost sm graph-view-btn";
+            graphButton.textContent = "Graph View";
+            graphButton.setAttribute("aria-expanded", "false");
+            graphButton.setAttribute("aria-label", `Show graph for ${sig.name}`);
+            graphCell.appendChild(graphButton);
+            row.appendChild(graphCell);
             for (const className of ["signal-table-name", "signal-table-value", "signal-table-range"]) {
                 const cell = document.createElement("td");
                 cell.className = className;
                 row.appendChild(cell);
             }
-            const nextRow = [...body.rows].find((candidate) => candidate.dataset.signalKey.localeCompare(key) > 0);
-            body.insertBefore(row, nextRow || null);
-            state.signalRows.set(key, row);
+            const chartRow = document.createElement("tr");
+            chartRow.className = "signal-chart-row";
+            chartRow.dataset.signalKey = key;
+            chartRow.hidden = true;
+            const chartCell = document.createElement("td");
+            chartCell.colSpan = 4;
+            chartCell.innerHTML =
+                '<div class="signal-chart-container">' +
+                '<div class="signal-chart-heading"><h3 class="signal-chart-title"></h3>' +
+                '<div class="signal-chart-current"></div><time class="signal-chart-time"></time></div>' +
+                '<p class="signal-chart-empty">Waiting for numeric CAN samples for this signal…</p>' +
+                '<canvas class="signal-chart-canvas" aria-label="Real-time decoded signal graph"></canvas>' +
+                '</div>';
+            chartRow.appendChild(chartCell);
+            graphButton.addEventListener("click", () => {
+                const expanded = graphButton.getAttribute("aria-expanded") !== "true";
+                graphButton.setAttribute("aria-expanded", String(expanded));
+                graphButton.setAttribute("aria-label", `${expanded ? "Hide" : "Show"} graph for ${state.signals.get(key).name}`);
+                chartRow.hidden = !expanded || row.hidden;
+                if (expanded) {
+                    const hasHistory = (state.signalHistory.get(key) || []).length > 0;
+                    chartRow.querySelector(".signal-chart-empty").hidden = hasHistory;
+                    drawSignalChart(key, chartRow.querySelector("canvas"));
+                }
+            });
+            const nextSignal = [...state.signalRows.entries()]
+                .find(([existingKey]) => existingKey.localeCompare(key) > 0)?.[1];
+            body.insertBefore(row, nextSignal?.row || null);
+            body.insertBefore(chartRow, nextSignal?.row || null);
+            signalRow = { row, chartRow, graphButton };
+            state.signalRows.set(key, signalRow);
         }
+        const { row, chartRow } = signalRow;
         row.querySelector(".signal-table-name").textContent = sig.name;
         row.querySelector(".signal-table-value").textContent = `${formatValue(sig)}${sig.unit ? ` ${sig.unit}` : ""}`;
         row.querySelector(".signal-table-range").textContent = formatSignalRange(sig);
         row.classList.toggle("stale", now - sig.updatedAt > STALE_MS);
-        row.hidden = Boolean(filter && !key.toLowerCase().includes(filter));
+        const filtered = Boolean(filter && !key.toLowerCase().includes(filter));
+        row.hidden = filtered;
+        chartRow.hidden = filtered || signalRow.graphButton.getAttribute("aria-expanded") !== "true";
+        const chartTitle = chartRow.querySelector(".signal-chart-title");
+        chartTitle.textContent = `Graph View · ${sig.name}`;
+        chartRow.querySelector(".signal-chart-current").textContent =
+            `Value: ${formatValue(sig)}${sig.unit ? ` ${sig.unit}` : ""}`;
+        chartRow.querySelector(".signal-chart-time").textContent =
+            `Updated ${new Date(sig.updatedAt).toLocaleTimeString([], { hour12: false })}`;
+        const history = state.signalHistory.get(key) || [];
+        chartRow.querySelector(".signal-chart-empty").hidden = history.length > 0;
+        if (!chartRow.hidden) drawSignalChart(key, chartRow.querySelector("canvas"));
     }
-    updateSignalSelectionControls();
-    drawSignalChart();
 }
 
 function renderRaw() {
@@ -738,9 +720,7 @@ setInterval(() => {
 }, 1000);
 
 $("signalSearch").addEventListener("input", renderSignals);
-$("confirmSignalsBtn").addEventListener("click", confirmSignalSelection);
-$("plotSignalsBtn").addEventListener("click", plotConfirmedSignals);
-window.addEventListener("resize", drawSignalChart);
+window.addEventListener("resize", renderSignals);
 $("clearBtn").addEventListener("click", () => {
     state.rawBuffer = [];
     state.rawDirty = true;

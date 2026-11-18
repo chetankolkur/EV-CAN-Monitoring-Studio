@@ -136,28 +136,13 @@
                                 <span class="bc-muted" id="recordInfo"></span>
                             </div>
                         </div>
-                        <div class="signal-selection-controls">
+                        <div class="signal-filter-bar">
                             <input type="search" id="signalSearch" placeholder="Filter signals…">
-                            <button id="confirmSignalsBtn" class="btn primary" type="button" disabled>OK</button>
-                            <span id="signalSelectionInfo" class="bc-muted" aria-live="polite">Select signals, then press OK.</span>
                         </div>
                         <div id="signalGrid" class="signal-table-wrap">
                             <div class="bc-empty">Load a DBC and connect an adapter to view live signals.</div>
                         </div>
                         <p class="bc-muted signal-range-note">Ranges come from DBC min/max metadata where defined; no separate diagnostic thresholds are configured.</p>
-                        <section class="signal-plot-panel" aria-label="Selected signal plots">
-                            <div class="signal-plot-head">
-                                <div>
-                                    <h3>Plot</h3>
-                                    <p class="bc-muted">Each selected signal uses its own value scale and actual CAN timestamps.</p>
-                                </div>
-                                <button id="plotSignalsBtn" class="btn primary" type="button" disabled>Plot selected signals</button>
-                            </div>
-                            <div id="signalPlotEmpty" class="signal-plot-empty">Confirm one or more signals, then plot them here.</div>
-                            <div class="signal-plot-scroll" id="signalPlotScroll" hidden>
-                                <canvas id="signalPlotCanvas" class="signal-plot-canvas" aria-label="Real-time graph of selected decoded CAN signals"></canvas>
-                            </div>
-                        </section>
                     </div>
                     <div class="section" hidden>
                         <div class="section-head">
