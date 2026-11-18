@@ -2,7 +2,8 @@
 import { parseDbc, decodeMessage, encodeRandom } from "./dbc.js";
 import { SlcanTransport, PcanUsbTransport, SimulatorTransport } from "./transports.js";
 
-const DBC_API_URL = "https://ke76ricmk3.execute-api.ap-south-1.amazonaws.com/prod/documents?path=version1&file=bms.dbc";
+const DBC_ECUS = ["BMS", "MCU", "TCU", "MiddleWare"];
+const DBC_SOURCE_FOR_TAB = { Cluster: "MCU" };
 const DBC_PROXY_URL = "/api/dbc-file";
 const RAW_ROWS = 200;
 const STALE_MS = 3000;
@@ -14,6 +15,10 @@ const $ = (id) => document.getElementById(id);
 
 const state = {
     dbc: null,
+    dbcs: new Map(),
+    dbcStatuses: new Map(),
+    activeEcu: "BMS",
+    dbcLoading: false,
     transport: null,
     totalFrames: 0,
     decodedFrames: 0,
@@ -62,73 +67,289 @@ function updateSidebarStatus(text, level = "idle") {
 }
 
 // ---------------------------------------------------------------- DBC
-function useDbc(text, source) {
-    const dbc = parseDbc(text);
-    if (!dbc.messageCount) throw new Error("No BO_ messages found. Is this a valid DBC file?");
-    state.dbc = dbc;
-    state.signals.clear();
-    state.signalRows.clear();
-    state.signalHistory.clear();
-    state.graphSignals.clear();
-    state.graphColors.clear();
-    state.nextGraphColor = 0;
-    state.graphPaused = false;
-    state.graphClearAfter = 0;
+function rebuildCombinedDbc() {
+    const messages = new Map();
+    let signalCount = 0;
+    for (const ecu of DBC_ECUS) {
+        const dbc = state.dbcs.get(ecu);
+        if (!dbc) continue;
+        signalCount += dbc.signalCount;
+        for (const [key, message] of dbc.messages) {
+            messages.set(`${ecu}:${key}`, message);
+        }
+    }
+    state.dbc = state.dbcs.size
+        ? { messages, messageCount: messages.size, signalCount }
+        : null;
+}
+
+function useDbc(ecu, dbc) {
+    const affectedEcus = ecu === "MCU" ? ["MCU", "Cluster"] : [ecu];
+    for (const key of state.signals.keys()) {
+        if (!affectedEcus.some((affectedEcu) => key.startsWith(`${affectedEcu}.`))) continue;
+        state.signals.delete(key);
+        state.signalHistory.delete(key);
+        state.signalRows.delete(key);
+        state.graphSignals.delete(key);
+    }
+    for (const [key, row] of state.signalRows) {
+        if (affectedEcus.some((affectedEcu) => key.startsWith(`${affectedEcu}.`))) {
+            row.row.remove();
+            row.chartRow.remove();
+            state.signalRows.delete(key);
+        }
+    }
+    for (const message of dbc.messages.values()) {
+        message.ecu = ecu;
+    }
+    state.dbcs.set(ecu, dbc);
+    rebuildCombinedDbc();
+    if (ecu === "BMS") state.ecuTestResults.clear();
+    state.firstUnmatchedFrame = null;
     state.graphPickerSignature = "";
     state.graphLegendSignature = "";
     state.graphDomain = null;
     state.graphHoverPosition = null;
-    state.ecuTestResults.clear();
-    state.firstUnmatchedFrame = null;
+    state.signalRows.clear();
     $("signalGrid").innerHTML = '<div class="bc-empty">Waiting for decoded CAN frames…</div>';
+    renderSignals();
     renderGraphSignalPicker(true);
     renderGraphView(true);
-    $("dbcInfo").textContent = `Loaded ${source}: ${dbc.messageCount} messages, ${dbc.signalCount} signals.`;
-    log(`DBC loaded from ${source}: ${dbc.messageCount} messages, ${dbc.signalCount} signals.`);
+    renderEcuTabs();
     renderEcuTests();
+    log(`${ecu} DBC loaded: ${dbc.messageCount} messages, ${dbc.signalCount} signals.`);
 }
 
-async function fetchDbcFromAws() {
-    const meta = await fetch(DBC_API_URL);
-    if (!meta.ok) throw new Error(`AWS API returned ${meta.status}`);
-    const json = await meta.json();
-    const url = json.files?.[0]?.url;
-    if (!url) throw new Error("AWS API did not return a download URL");
-    const file = await fetch(url);
-    if (!file.ok) throw new Error(`DBC download returned ${file.status}`);
-    return file.text();
-}
-
-async function fetchDbcFromProxy() {
-    const res = await fetch(DBC_PROXY_URL);
-    if (!res.ok) throw new Error(`Server returned ${res.status}`);
-    return res.text();
-}
-
-$("dbcAwsBtn").addEventListener("click", async () => {
-    const btn = $("dbcAwsBtn");
-    btn.disabled = true;
-    $("dbcInfo").textContent = "Downloading BMS DBC…";
-    try {
-        let text;
-        try {
-            text = await fetchDbcFromAws();
-        } catch (err) {
-            log(`Direct AWS download failed (${err.message}); trying the dashboard server.`);
-            text = await fetchDbcFromProxy();
-        }
-        useDbc(text, "server (bms.dbc)");
-    } catch (err) {
-        $("dbcInfo").textContent = `Could not download the DBC: ${err.message}. Check the server connection and try again.`;
-        log(`DBC download error: ${err.message}`);
-    } finally {
-        btn.disabled = false;
+function renderEcuTabs() {
+    for (const tab of $("ecuTabs").querySelectorAll("[data-ecu-tab]")) {
+        const selected = tab.dataset.ecuTab === state.activeEcu;
+        tab.classList.toggle("active", selected);
+        tab.setAttribute("aria-selected", String(selected));
+        const source = DBC_SOURCE_FOR_TAB[tab.dataset.ecuTab] || tab.dataset.ecuTab;
+        const dbc = state.dbcs.get(source);
+        const unavailable = tab.dataset.ecuTab === "Cluster" && !dbc;
+        tab.disabled = unavailable;
+        tab.setAttribute("aria-disabled", String(unavailable));
+        tab.classList.toggle("unavailable", unavailable);
+        tab.title = dbc
+            ? tab.dataset.ecuTab === "Cluster"
+                ? `Using MCU DBC · ${dbc.messageCount} messages · ${dbc.signalCount} signals`
+                : `${dbc.messageCount} messages · ${dbc.signalCount} signals loaded`
+            : tab.dataset.ecuTab === "Cluster"
+                ? "Load the MCU DBC to use it for Cluster"
+                : `Load the ${tab.dataset.ecuTab} DBC to decode its signals`;
     }
+}
+
+function renderDbcInfo() {
+    const lines = DBC_ECUS.filter((ecu) => state.dbcStatuses.has(ecu)).map((ecu) => {
+        const status = state.dbcStatuses.get(ecu);
+        if (status.loading) {
+            return `${ecu}: Loading…${status.previous ? " (existing DBC remains active)" : ""}`;
+        }
+        if (status.error) {
+            const previous = status.previous
+                ? ` Previous DBC remains active (${status.previous.messages} messages, ${status.previous.signals} signals).`
+                : "";
+            return `${ecu}: Could not load — ${status.error}.${previous}`;
+        }
+        return `${ecu}: Loaded ${status.messages} messages, ${status.signals} signals`;
+    });
+    $("dbcInfo").textContent = lines.length ? lines.join("\n") : "No DBC loaded.";
+}
+
+function parseDbcText(text) {
+    const hasMessageDefinition =
+        typeof text === "string" && /^\s*BO_\s+\d+\s+\w+\s*:\s*\d+\s+\w+/m.test(text);
+    const hasSignalDefinition =
+        typeof text === "string" && /^\s*SG_\s+\w+\s*(?:M|m\d+M?)?\s*:\s*\d+\|\d+@[01][+-]/m.test(text);
+    if (!hasMessageDefinition || !hasSignalDefinition) {
+        throw new Error("Downloaded content is not a valid DBC file.");
+    }
+    const dbc = parseDbc(text);
+    if (!dbc.messageCount || !dbc.signalCount) {
+        throw new Error("The DBC file must contain at least one message and one signal.");
+    }
+    return dbc;
+}
+
+async function fetchDbcFromServer(ecu) {
+    const response = await fetch(`${DBC_PROXY_URL}/${encodeURIComponent(ecu)}`);
+    if (!response.ok) {
+        const detail = response.headers.get("content-type")?.includes("application/json")
+            ? (await response.json()).detail
+            : await response.text();
+        throw new Error(`Server returned ${response.status}${detail ? `: ${detail}` : ""}`);
+    }
+    return response.text();
+}
+
+function setDbcLoading(loading) {
+    state.dbcLoading = loading;
+    $("dbcMenuToggle").disabled = loading;
+    $("loadAllDbcBtn").disabled = loading;
+    for (const button of $("dbcMenu").querySelectorAll("[data-load-dbc]")) {
+        button.disabled = loading;
+    }
+}
+
+async function loadDbc(ecu) {
+    const currentDbc = state.dbcs.get(ecu);
+    const previous = currentDbc
+        ? { messages: currentDbc.messageCount, signals: currentDbc.signalCount }
+        : null;
+    state.dbcStatuses.set(ecu, { loading: true, previous });
+    renderDbcInfo();
+    try {
+        const dbc = parseDbcText(await fetchDbcFromServer(ecu));
+        useDbc(ecu, dbc);
+        state.dbcStatuses.set(ecu, {
+            messages: dbc.messageCount,
+            signals: dbc.signalCount
+        });
+        return { ecu, dbc };
+    } catch (error) {
+        state.dbcStatuses.set(ecu, { error: error.message, previous });
+        log(`${ecu} DBC download error: ${error.message}`);
+        return { ecu, error };
+    } finally {
+        renderDbcInfo();
+    }
+}
+
+$("dbcMenuToggle").addEventListener("click", () => {
+    const menu = $("dbcMenu");
+    const open = menu.hidden;
+    menu.hidden = !open;
+    $("dbcMenuToggle").setAttribute("aria-expanded", String(open));
+});
+$("dbcMenu").addEventListener("click", async (event) => {
+    const button = event.target.closest("[data-load-dbc]");
+    if (!button || state.dbcLoading) return;
+    $("dbcMenu").hidden = true;
+    $("dbcMenuToggle").setAttribute("aria-expanded", "false");
+    setDbcLoading(true);
+    await loadDbc(button.dataset.loadDbc);
+    setDbcLoading(false);
+});
+$("loadAllDbcBtn").addEventListener("click", async () => {
+    if (state.dbcLoading) return;
+    $("dbcMenu").hidden = true;
+    $("dbcMenuToggle").setAttribute("aria-expanded", "false");
+    setDbcLoading(true);
+    await Promise.all(DBC_ECUS.map((ecu) => loadDbc(ecu)));
+    setDbcLoading(false);
+});
+document.addEventListener("click", (event) => {
+    if (!event.target.closest(".dbc-loader")) {
+        $("dbcMenu").hidden = true;
+        $("dbcMenuToggle").setAttribute("aria-expanded", "false");
+    }
+});
+document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") {
+        $("dbcMenu").hidden = true;
+        $("dbcMenuToggle").setAttribute("aria-expanded", "false");
+    }
+});
+$("ecuTabs").addEventListener("click", (event) => {
+    const tab = event.target.closest("[data-ecu-tab]");
+    if (!tab || tab.disabled) return;
+    if (state.activeEcu !== tab.dataset.ecuTab) {
+        state.activeEcu = tab.dataset.ecuTab;
+        $("signalSearch").value = "";
+        state.signalRows.clear();
+        $("signalGrid").innerHTML = '<div class="bc-empty"></div>';
+    }
+    renderEcuTabs();
+    renderSignals();
 });
 
 // ---------------------------------------------------------------- frames
 function hex(n, width) {
     return n.toString(16).toUpperCase().padStart(width, "0");
+}
+
+function resolveFrameMessage(frame) {
+    const sameFormat = [];
+    for (const ecu of DBC_ECUS) {
+        const dbc = state.dbcs.get(ecu);
+        if (!dbc) continue;
+        const message = dbc.getMessage(frame.id, frame.extended);
+        if (message) sameFormat.push({ ecu, message });
+    }
+    if (!sameFormat.length) {
+        const idExists = [...state.dbcs.values()].some((dbc) => dbc.findById(frame.id));
+        return { error: idExists ? "CAN format mismatch" : "Not in DBC" };
+    }
+
+    const matchingDlc = sameFormat.filter(({ message }) => message.dlc === frame.dlc);
+    if (matchingDlc.length === 1) return { messages: matchingDlc };
+    if (matchingDlc.length > 1 && canDecodeDbcAliasesTogether(matchingDlc)) {
+        return { messages: matchingDlc };
+    }
+    if (matchingDlc.length > 1) return { error: "Ambiguous DBC match" };
+    // Keep decoding a unique ID/format match even when the reported DLC differs.
+    if (sameFormat.length === 1) return { messages: sameFormat };
+    return { error: "CAN DLC mismatch" };
+}
+
+function signalKeysForEcu(ecu, message, signal) {
+    const key = `${ecu}.${message}.${signal}`;
+    return ecu === "MCU" ? [key, `Cluster.${message}.${signal}`] : [key];
+}
+
+function signalBitPositions(signal) {
+    const positions = [];
+    if (signal.littleEndian) {
+        for (let index = 0; index < signal.length; index++) {
+            positions.push(signal.startBit + index);
+        }
+    } else {
+        const msbLinear = (signal.startBit >> 3) * 8 + (7 - (signal.startBit & 7));
+        for (let index = 0; index < signal.length; index++) {
+            const position = msbLinear + index;
+            positions.push((position >> 3) * 8 + (7 - (position & 7)));
+        }
+    }
+    return new Set(positions);
+}
+
+function sameSignalEncoding(left, right) {
+    if (left.startBit !== right.startBit ||
+        left.length !== right.length ||
+        left.littleEndian !== right.littleEndian ||
+        left.signed !== right.signed ||
+        left.factor !== right.factor ||
+        left.offset !== right.offset ||
+        left.valueType !== right.valueType ||
+        left.muxValue !== right.muxValue ||
+        left.isMultiplexor !== right.isMultiplexor) {
+        return false;
+    }
+    const leftBits = signalBitPositions(left);
+    const rightBits = signalBitPositions(right);
+    return leftBits.size === rightBits.size &&
+        [...leftBits].every((position) => rightBits.has(position));
+}
+
+function canDecodeDbcAliasesTogether(candidates) {
+    // Shared IDs are decoded into both ECU namespaces only when overlapping bits agree.
+    for (let leftIndex = 0; leftIndex < candidates.length; leftIndex++) {
+        for (let rightIndex = leftIndex + 1; rightIndex < candidates.length; rightIndex++) {
+            const leftSignals = candidates[leftIndex].message.signals;
+            const rightSignals = candidates[rightIndex].message.signals;
+            for (const left of leftSignals) {
+                const leftBits = signalBitPositions(left);
+                for (const right of rightSignals) {
+                    const rightBits = signalBitPositions(right);
+                    const overlaps = [...leftBits].some((position) => rightBits.has(position));
+                    if (overlaps && !sameSignalEncoding(left, right)) return false;
+                }
+            }
+        }
+    }
+    return true;
 }
 
 function handleFrame(frame) {
@@ -141,43 +362,51 @@ function handleFrame(frame) {
     state.uniqueIds.add(`${frame.extended ? "x" : "s"}${frame.id}`);
 
     let messageName = "Not in DBC";
-    if (state.dbc && !frame.rtr) {
-        const message = state.dbc.getMessage(frame.id, frame.extended);
-        if (message) {
-            messageName = message.name;
+    if (state.dbcs.size && !frame.rtr) {
+        const resolved = resolveFrameMessage(frame);
+        if (resolved.messages) {
+            messageName = resolved.messages
+                .map(({ ecu, message }) => `${ecu} · ${message.name}`)
+                .join(" / ");
             state.decodedFrames++;
-            for (const sig of decodeMessage(message, frame.data)) {
-                const key = `${message.name}.${sig.name}`;
-                const decoded = {
-                    ...sig, message: message.name, canId, updatedAt: now
-                };
-                state.signals.set(key, decoded);
-                let history = state.signalHistory.get(key);
-                if (!history) {
-                    history = [];
-                    state.signalHistory.set(key, history);
-                }
-                if (typeof sig.value === "number" && Number.isFinite(sig.value)) {
-                    history.push({ time: now, value: sig.value });
-                    if (history.length > MAX_SIGNAL_HISTORY) {
-                        history.splice(0, history.length - MAX_SIGNAL_HISTORY);
+            for (const { ecu, message } of resolved.messages) {
+                for (const sig of decodeMessage(message, frame.data)) {
+                    const decoded = {
+                        ...sig, ecu, message: message.name, canId, updatedAt: now
+                    };
+                    for (const key of signalKeysForEcu(ecu, message.name, sig.name)) {
+                        const aliasEcu = key.startsWith("Cluster.") ? "Cluster" : ecu;
+                        state.signals.set(key, { ...decoded, ecu: aliasEcu });
+                        let history = state.signalHistory.get(key);
+                        if (!history) {
+                            history = [];
+                            state.signalHistory.set(key, history);
+                        }
+                        if (typeof sig.value === "number" && Number.isFinite(sig.value)) {
+                            history.push({ time: now, value: sig.value });
+                            if (history.length > MAX_SIGNAL_HISTORY) {
+                                history.splice(0, history.length - MAX_SIGNAL_HISTORY);
+                            }
+                        }
                     }
                 }
             }
-        } else if (state.dbc.findById(frame.id)) {
-            messageName = "CAN format mismatch";
+        } else {
+            messageName = resolved.error;
         }
-    } else if (!state.dbc) {
+    } else if (!state.dbcs.size) {
         messageName = "DBC not loaded";
     }
 
     const matched = messageName !== "Not in DBC" &&
         messageName !== "DBC not loaded" &&
-        messageName !== "CAN format mismatch";
+        messageName !== "CAN format mismatch" &&
+        messageName !== "CAN DLC mismatch" &&
+        messageName !== "Ambiguous DBC match";
 
     if (!matched) {
         state.unmatchedIds.add(canId);
-        if (state.dbc && !state.firstUnmatchedFrame) {
+        if (state.dbcs.size && !state.firstUnmatchedFrame) {
             state.firstUnmatchedFrame = { canId, extended: frame.extended, messageName };
         }
     }
@@ -286,12 +515,13 @@ const ECU_TESTS = [
 ];
 
 function getCellVoltageDefinitions() {
-    if (!state.dbc) return [];
-    return [...state.dbc.messages.values()].flatMap((message) =>
+    const bmsDbc = state.dbcs.get("BMS");
+    if (!bmsDbc) return [];
+    return [...bmsDbc.messages.values()].flatMap((message) =>
         message.signals
             .filter((signal) => /^cell\d+volt$/i.test(signal.name.replace(/[^a-z\d]/gi, "")))
             .map((signal) => ({
-                key: `${message.name}.${signal.name}`,
+                key: `BMS.${message.name}.${signal.name}`,
                 name: signal.name,
                 unit: signal.unit
             }))
@@ -299,7 +529,7 @@ function getCellVoltageDefinitions() {
 }
 
 function getCellVoltageReadings() {
-    if (!state.dbc) {
+    if (!state.dbcs.has("BMS")) {
         return { available: false, reason: "Load the BMS DBC before running this test." };
     }
     if (!state.transport || state.transport instanceof SimulatorTransport) {
@@ -480,6 +710,10 @@ function formatAxisValue(value) {
     return Number(value.toPrecision(4)).toString();
 }
 
+function signalLabel(sig) {
+    return sig.ecu ? `${sig.ecu} · ${sig.name}` : sig.name;
+}
+
 function graphHistoryFor(key) {
     return (state.signalHistory.get(key) || []).filter((point) => point.time >= state.graphClearAfter);
 }
@@ -498,17 +732,17 @@ function renderGraphSignalPicker(force = false) {
     const keys = [...state.signals.keys()].sort();
     const signature = `${search}\n${keys.join("\n")}\n${[...state.graphSignals].sort().join("\n")}`;
     if (!force && signature === state.graphPickerSignature) {
-        for (const option of results.querySelectorAll(".graph-signal-option")) {
-            const sig = state.signals.get(option.dataset.signalKey);
-            if (sig) {
-                option.querySelector(".graph-signal-option-value").textContent =
-                    `${formatValue(sig)}${sig.unit ? ` ${sig.unit}` : ""}`;
-            }
-        }
         return;
     }
     state.graphPickerSignature = signature;
 
+    if (!search) {
+        results.hidden = true;
+        results.replaceChildren();
+        return;
+    }
+
+    results.hidden = false;
     const matches = keys.filter((key) => {
         const sig = state.signals.get(key);
         return `${sig.name} ${key}`.toLowerCase().includes(search);
@@ -527,7 +761,7 @@ function renderGraphSignalPicker(force = false) {
         const checkbox = document.createElement("input");
         checkbox.type = "checkbox";
         checkbox.checked = state.graphSignals.has(key);
-        checkbox.setAttribute("aria-label", `Plot ${sig.name}`);
+        checkbox.setAttribute("aria-label", `Plot ${signalLabel(sig)}`);
         checkbox.addEventListener("change", () => {
             if (checkbox.checked) {
                 state.graphSignals.add(key);
@@ -542,11 +776,8 @@ function renderGraphSignalPicker(force = false) {
         });
         const name = document.createElement("span");
         name.className = "graph-signal-option-name";
-        name.textContent = sig.name;
-        const value = document.createElement("span");
-        value.className = "graph-signal-option-value";
-        value.textContent = `${formatValue(sig)}${sig.unit ? ` ${sig.unit}` : ""}`;
-        label.append(checkbox, name, value);
+        name.textContent = signalLabel(sig);
+        label.append(checkbox, name);
         fragment.appendChild(label);
     }
     results.replaceChildren(fragment);
@@ -570,14 +801,14 @@ function renderGraphLegend() {
             swatch.style.backgroundColor = graphColorFor(key);
             const name = document.createElement("span");
             name.className = "graph-legend-name";
-            name.textContent = sig.name;
+            name.textContent = signalLabel(sig);
             const current = document.createElement("span");
             current.className = "graph-legend-current";
             const remove = document.createElement("button");
             remove.type = "button";
             remove.className = "graph-legend-remove";
             remove.textContent = "×";
-            remove.setAttribute("aria-label", `Remove ${sig.name} from graph`);
+            remove.setAttribute("aria-label", `Remove ${signalLabel(sig)} from graph`);
             remove.addEventListener("click", () => {
                 state.graphSignals.delete(key);
                 state.graphPickerSignature = "";
@@ -759,7 +990,7 @@ function drawGraphCanvas(hoverTime = null) {
         context.translate(axisX, plotTop - 8);
         context.textAlign = "center";
         context.textBaseline = "bottom";
-        context.fillText(item.sig.unit || item.sig.name, 0, 0, GRAPH_AXIS_WIDTH - 8);
+        context.fillText(item.sig.unit || signalLabel(item.sig), 0, 0, GRAPH_AXIS_WIDTH - 8);
         context.restore();
 
         context.strokeStyle = item.color;
@@ -849,11 +1080,11 @@ function updateGraphTooltip(event) {
     const lines = [`Time: ${new Date(timestamp).toISOString()}`];
     for (const series of domain.series) {
         if (!series.history.length) {
-            lines.push(`${series.sig.name}: no samples`);
+            lines.push(`${signalLabel(series.sig)}: no samples`);
             continue;
         }
         const point = closestTime(series.history);
-        lines.push(`${series.sig.name}: ${formatAxisValue(point.value)}${series.sig.unit ? ` ${series.sig.unit}` : ""} (${new Date(point.time).toISOString()})`);
+        lines.push(`${signalLabel(series.sig)}: ${formatAxisValue(point.value)}${series.sig.unit ? ` ${series.sig.unit}` : ""} (${new Date(point.time).toISOString()})`);
     }
     tooltip.textContent = lines.join("\n");
     tooltip.hidden = false;
@@ -975,25 +1206,60 @@ function formatSignalRange(sig) {
     return sig.unit ? `${range} ${sig.unit}` : range;
 }
 
+function getDbcSignalDefinitions() {
+    const definitions = [];
+    const ecu = state.activeEcu;
+    const source = DBC_SOURCE_FOR_TAB[ecu] || ecu;
+    const dbc = state.dbcs.get(source);
+    if (!dbc) return definitions;
+
+    for (const message of dbc.messages.values()) {
+        for (const signal of message.signals) {
+            definitions.push({
+                key: `${ecu}.${message.name}.${signal.name}`,
+                signal: { ...signal, ecu, sourceEcu: source, message: message.name }
+            });
+        }
+    }
+    return definitions.sort((left, right) => left.key.localeCompare(right.key));
+}
+
 function renderSignals() {
     const grid = $("signalGrid");
     const filter = $("signalSearch").value.trim().toLowerCase();
     const now = Date.now();
+    const definitions = getDbcSignalDefinitions();
 
     if (!state.signals.size && state.firstUnmatchedFrame) {
         const { canId, extended, messageName } = state.firstUnmatchedFrame;
-        const reason = messageName === "CAN format mismatch"
-            ? "this ID is in the DBC but its standard/extended format differs"
-            : "this ID is not in the DBC";
+        const reasons = {
+            "CAN format mismatch": "this ID exists in a DBC but its standard/extended format differs",
+            "CAN DLC mismatch": "this ID and frame format match, but the received DLC does not match the DBC",
+            "Ambiguous DBC match": "multiple loaded DBCs define this ID and frame format with the same DLC"
+        };
+        const reason = reasons[messageName] || "this ID is not in a loaded DBC";
         const hint = grid.querySelector(".bc-empty");
         if (hint) {
             hint.textContent =
-                `CAN frames are arriving, but none match the loaded DBC. First unmatched: ${canId} ${extended ? "EXT" : "STD"} — ${reason}. Check that the adapter is connected to the BMS CAN bus and that its bitrate matches the vehicle.`;
+                `CAN frames are arriving, but none match a loaded DBC. First unmatched: ${canId} ${extended ? "EXT" : "STD"} — ${reason}. Check the adapter, bus bitrate and loaded ECU DBCs.`;
         }
     }
 
-    const keys = [...state.signals.keys()].sort();
-    if (keys.length && grid.querySelector(".bc-empty")) {
+    const keys = definitions.map(({ key }) => key);
+    const table = grid.querySelector(".signal-table");
+    if (!definitions.length && !table) {
+        const hint = grid.querySelector(".bc-empty");
+        if (hint && !state.firstUnmatchedFrame) {
+            const source = DBC_SOURCE_FOR_TAB[state.activeEcu] || state.activeEcu;
+            hint.textContent = state.dbcs.has(source)
+                ? `Waiting for live ${state.activeEcu} signals from incoming CAN frames…`
+                : state.activeEcu === "Cluster"
+                    ? "Load the MCU DBC to use its signal definitions in the Cluster tab."
+                    : `Load the ${state.activeEcu} DBC and connect an adapter to view its live signals.`;
+        }
+        return;
+    }
+    if (definitions.length && !table) {
         grid.innerHTML =
             '<table class="signal-table"><thead><tr>' +
             '<th scope="col">Graph View</th><th scope="col">Signal</th><th scope="col">Value</th>' +
@@ -1001,8 +1267,11 @@ function renderSignals() {
             '</tr></thead><tbody></tbody></table>';
     }
     const body = grid.querySelector(".signal-table tbody");
-    for (const key of keys) {
-        const sig = state.signals.get(key);
+    if (!body) return;
+    let visibleCount = 0;
+    for (const { key, signal: definition } of definitions) {
+        const liveSignal = state.signals.get(key);
+        const sig = liveSignal ? { ...definition, ...liveSignal } : definition;
         let signalRow = state.signalRows.get(key);
         if (!signalRow) {
             const row = document.createElement("tr");
@@ -1014,7 +1283,7 @@ function renderSignals() {
             graphButton.className = "btn ghost sm graph-view-btn";
             graphButton.textContent = "Graph View";
             graphButton.setAttribute("aria-expanded", "false");
-            graphButton.setAttribute("aria-label", `Show graph for ${sig.name}`);
+            graphButton.setAttribute("aria-label", `Show graph for ${signalLabel(sig)}`);
             graphCell.appendChild(graphButton);
             row.appendChild(graphCell);
             for (const className of ["signal-table-name", "signal-table-value", "signal-table-range"]) {
@@ -1039,11 +1308,14 @@ function renderSignals() {
             graphButton.addEventListener("click", () => {
                 const expanded = graphButton.getAttribute("aria-expanded") !== "true";
                 graphButton.setAttribute("aria-expanded", String(expanded));
-                graphButton.setAttribute("aria-label", `${expanded ? "Hide" : "Show"} graph for ${state.signals.get(key).name}`);
+                graphButton.setAttribute("aria-label", `${expanded ? "Hide" : "Show"} graph for ${signalLabel(definition)}`);
                 chartRow.hidden = !expanded || row.hidden;
                 if (expanded) {
                     const hasHistory = (state.signalHistory.get(key) || []).length > 0;
+                    chartRow.querySelector(".signal-chart-empty").textContent =
+                        hasHistory ? "" : "Waiting for data before a graph can be drawn.";
                     chartRow.querySelector(".signal-chart-empty").hidden = hasHistory;
+                    chartRow.querySelector("canvas").hidden = !hasHistory;
                     drawSignalChart(key, chartRow.querySelector("canvas"));
                 }
             });
@@ -1056,22 +1328,52 @@ function renderSignals() {
         }
         const { row, chartRow } = signalRow;
         row.querySelector(".signal-table-name").textContent = sig.name;
-        row.querySelector(".signal-table-value").textContent = `${formatValue(sig)}${sig.unit ? ` ${sig.unit}` : ""}`;
+        const valueCell = row.querySelector(".signal-table-value");
+        valueCell.textContent = liveSignal
+            ? `${formatValue(sig)}${sig.unit ? ` ${sig.unit}` : ""}`
+            : "Waiting for data";
+        valueCell.classList.toggle("waiting", !liveSignal);
         row.querySelector(".signal-table-range").textContent = formatSignalRange(sig);
-        row.classList.toggle("stale", now - sig.updatedAt > STALE_MS);
+        row.classList.toggle("stale", Boolean(liveSignal && now - liveSignal.updatedAt > STALE_MS));
         const filtered = Boolean(filter && !key.toLowerCase().includes(filter));
         row.hidden = filtered;
         chartRow.hidden = filtered || signalRow.graphButton.getAttribute("aria-expanded") !== "true";
         const chartTitle = chartRow.querySelector(".signal-chart-title");
-        chartTitle.textContent = `Graph View · ${sig.name}`;
+        chartTitle.textContent = `Graph View · ${signalLabel(sig)}`;
         chartRow.querySelector(".signal-chart-current").textContent =
-            `Value: ${formatValue(sig)}${sig.unit ? ` ${sig.unit}` : ""}`;
-        chartRow.querySelector(".signal-chart-time").textContent =
-            `Updated ${new Date(sig.updatedAt).toLocaleTimeString([], { hour12: false })}`;
+            liveSignal
+                ? `Value: ${formatValue(sig)}${sig.unit ? ` ${sig.unit}` : ""}`
+                : "Waiting for data";
+        chartRow.querySelector(".signal-chart-time").textContent = liveSignal
+            ? `Updated ${new Date(liveSignal.updatedAt).toLocaleTimeString([], { hour12: false })}`
+            : "No CAN sample received";
         const history = state.signalHistory.get(key) || [];
+        chartRow.querySelector(".signal-chart-empty").textContent =
+            history.length ? "No numeric samples available for this signal." : "Waiting for data before a graph can be drawn.";
         chartRow.querySelector(".signal-chart-empty").hidden = history.length > 0;
-        if (!chartRow.hidden) drawSignalChart(key, chartRow.querySelector("canvas"));
+        chartRow.querySelector("canvas").hidden = history.length === 0;
+        if (!filtered) {
+            visibleCount++;
+            if (!chartRow.hidden && history.length) drawSignalChart(key, chartRow.querySelector("canvas"));
+        }
     }
+    let emptyMessage = grid.querySelector(".signal-empty-message");
+    if (!emptyMessage) {
+        emptyMessage = document.createElement("div");
+        emptyMessage.className = "bc-empty signal-empty-message";
+        grid.appendChild(emptyMessage);
+    }
+    emptyMessage.hidden = visibleCount > 0;
+    const activeSource = DBC_SOURCE_FOR_TAB[state.activeEcu] || state.activeEcu;
+    emptyMessage.textContent = !state.dbcs.has(activeSource)
+        ? state.activeEcu === "Cluster"
+            ? "Load the MCU DBC to use its signal definitions in the Cluster tab."
+            : `Load the ${state.activeEcu} DBC to decode its signals.`
+            : !definitions.length
+                ? `The ${state.activeEcu} DBC contains no signal definitions.`
+            : filter
+                ? `No ${state.activeEcu} signals match this search.`
+                : `Waiting for live ${state.activeEcu} signals from incoming CAN frames…`;
 }
 
 function renderRaw() {
@@ -1253,7 +1555,7 @@ $("recordBtn").addEventListener("click", () => {
 
         $("exportBtn").disabled = true;
 
-        log("Recording started (one row per decoded BMS frame).");
+        log("Recording started (one row per decoded CAN frame).");
 
     } else {
         state.recording = false;

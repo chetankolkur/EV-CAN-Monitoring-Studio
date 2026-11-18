@@ -26,6 +26,6 @@ Open http://localhost:8000
 
 ## Dashboard capabilities
 
-The dark E3 ELECTRIC.AI diagnostic interface uses the existing FastAPI dashboard and DBC routes. Live CAN frames are received and decoded in the browser through PCAN-USB (WebUSB) or SLCAN (Web Serial); decoded signals can be recorded and exported as CSV. The optional simulator generates synthetic frames for interface testing only.
+The dark E3 ELECTRIC.AI diagnostic interface uses the FastAPI dashboard and DBC routes. The Connection Setup DBC menu loads BMS, MCU, TCU, and MiddleWare definitions through `/api/dbc-file/{ECU}`; `/api/dbc-file` remains the BMS-compatible route. Live CAN frames are received and decoded in the browser through PCAN-USB (WebUSB) or SLCAN (Web Serial); decoded signals can be recorded and exported as CSV. Live Data filters decoded signals by ECU, and Graph View can plot signals from every loaded DBC. The optional simulator generates synthetic frames for interface testing only.
 
 The current backend does not provide vehicle identity, DTC history, ECU test, repair workflow, firmware update, or parts-catalogue APIs. Those screens are marked unavailable and do not display sample vehicle data or simulated diagnostic results.
