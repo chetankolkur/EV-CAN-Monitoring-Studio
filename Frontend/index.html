@@ -17,12 +17,20 @@
         <aside class="sidebar">
             <a class="brand" href="/" aria-label="E3 ELECTRIC.AI home">
                 <img src="/static/e3-electric-ai-logo.png" alt="E3 ELECTRIC.AI" class="e3-brand-logo">
-                <span class="brand-sub">VEHICLE DIAGNOSTICS</span>
             </a>
             <nav class="nav" aria-label="Main navigation">
-                <button class="nav-item active" type="button" data-screen="dashboard">Dashboard</button>
-                <button class="nav-item" type="button" data-screen="ecu">ECU Tests</button>
-                <button class="nav-item" type="button" data-screen="live">Live Data</button>
+                <button class="nav-item active" type="button" data-screen="dashboard">
+                    <svg class="nav-icon" viewBox="0 0 20 20" aria-hidden="true"><rect x="2" y="2" width="6" height="6" rx=".5"/><rect x="12" y="2" width="6" height="6" rx=".5"/><rect x="2" y="12" width="6" height="6" rx=".5"/><rect x="12" y="12" width="6" height="6" rx=".5"/></svg>
+                    <span>Dashboard</span>
+                </button>
+                <button class="nav-item" type="button" data-screen="ecu">
+                    <svg class="nav-icon" viewBox="0 0 20 20" aria-hidden="true"><rect x="2" y="2" width="16" height="16" rx="1"/><path d="m5.5 10 3 3 6-6"/></svg>
+                    <span>ECU Tests</span>
+                </button>
+                <button class="nav-item" type="button" data-screen="live">
+                    <svg class="nav-icon" viewBox="0 0 20 20" aria-hidden="true"><path d="M1 10h3l2.2-6 4.1 12 2.4-7H19"/></svg>
+                    <span>Live Data</span>
+                </button>
                 <div class="nav-group">
                     <button class="nav-item" id="vm-toggle" type="button" aria-expanded="true">Vehicle Management <span class="nav-caret open" id="vm-caret" aria-hidden="true">›</span></button>
                     <div class="nav-sub open" id="vm-sub">
@@ -123,13 +131,33 @@
                         <div class="section-head">
                             <div><div class="section-title"><span class="bar"></span>Live decoded signals</div><div class="section-note">Actual values decoded from received CAN frames and the loaded DBC.</div></div>
                             <div class="bc-row">
-                                <input type="search" id="signalSearch" placeholder="Filter signals or messages…">
                                 <button id="recordBtn" class="btn" type="button">● Start recording</button>
                                 <button id="exportBtn" class="btn ghost" type="button" disabled>↓ Export CSV</button>
                                 <span class="bc-muted" id="recordInfo"></span>
                             </div>
                         </div>
-                        <div id="signalGrid" class="bc-signal-grid"><div class="bc-empty">Load a DBC and connect an adapter to view live signals.</div></div>
+                        <div class="signal-selection-controls">
+                            <input type="search" id="signalSearch" placeholder="Filter signals…">
+                            <button id="confirmSignalsBtn" class="btn primary" type="button" disabled>OK</button>
+                            <span id="signalSelectionInfo" class="bc-muted" aria-live="polite">Select signals, then press OK.</span>
+                        </div>
+                        <div id="signalGrid" class="signal-table-wrap">
+                            <div class="bc-empty">Load a DBC and connect an adapter to view live signals.</div>
+                        </div>
+                        <p class="bc-muted signal-range-note">Ranges come from DBC min/max metadata where defined; no separate diagnostic thresholds are configured.</p>
+                        <section class="signal-plot-panel" aria-label="Selected signal plots">
+                            <div class="signal-plot-head">
+                                <div>
+                                    <h3>Plot</h3>
+                                    <p class="bc-muted">Each selected signal uses its own value scale and actual CAN timestamps.</p>
+                                </div>
+                                <button id="plotSignalsBtn" class="btn primary" type="button" disabled>Plot selected signals</button>
+                            </div>
+                            <div id="signalPlotEmpty" class="signal-plot-empty">Confirm one or more signals, then plot them here.</div>
+                            <div class="signal-plot-scroll" id="signalPlotScroll" hidden>
+                                <canvas id="signalPlotCanvas" class="signal-plot-canvas" aria-label="Real-time graph of selected decoded CAN signals"></canvas>
+                            </div>
+                        </section>
                     </div>
                     <div class="section" hidden>
                         <div class="section-head">

@@ -130,23 +130,6 @@ input[type="search"] { min-width: 220px; }
 .bc-metric span { display: block; color: var(--muted); font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: .6px; }
 .bc-metric strong { font-size: 28px; }
 
-.bc-signal-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
-    gap: 12px;
-}
-.bc-signal {
-    padding: 12px 14px;
-    border: 1px solid var(--border);
-    border-radius: 12px;
-    background: #f8faff;
-}
-.bc-signal .name { font-weight: 700; font-size: 13px; word-break: break-word; }
-.bc-signal .msg { color: var(--muted); font-size: 11px; }
-.bc-signal .value { margin-top: 6px; font-size: 22px; font-weight: 700; color: var(--blue); word-break: break-word; }
-.bc-signal .value small { font-size: 13px; color: var(--muted); margin-left: 4px; font-weight: 600; }
-.bc-signal.stale { opacity: .45; }
-
 .bc-empty { color: var(--muted); padding: 16px; text-align: center; grid-column: 1 / -1; }
 
 .bc-table-wrap { max-height: 360px; overflow: auto; border: 1px solid var(--border); border-radius: 12px; }
