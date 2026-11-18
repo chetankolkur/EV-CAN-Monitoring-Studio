@@ -8,7 +8,7 @@ const RAW_ROWS = 200;
 const STALE_MS = 3000;
 const MAX_SIGNAL_HISTORY = 120;
 const SIGNAL_CHART_HEIGHT = 340;
-const GRAPH_LANE_HEIGHT = 210;
+const GRAPH_AXIS_WIDTH = 58;
 
 const $ = (id) => document.getElementById(id);
 
@@ -628,7 +628,11 @@ function renderGraphView(force = false) {
 function drawGraphCanvas(hoverTime = null) {
     const canvas = $("graphCanvas");
     const signals = [...state.graphSignals].map((key) => ({
-        key, sig: state.signals.get(key), history: graphHistoryFor(key)
+        key,
+        sig: state.signals.get(key),
+        history: graphHistoryFor(key).filter((point) =>
+            Number.isFinite(point.time) && Number.isFinite(point.value)
+        )
     })).filter((item) => item.sig);
     const availableHistories = signals.map((item) => item.history).filter((history) => history.length);
     const empty = $("graphEmpty");
@@ -644,11 +648,10 @@ function drawGraphCanvas(hoverTime = null) {
     canvas.hidden = false;
     empty.hidden = true;
 
-    const width = $("graphCanvasWrap").clientWidth;
-    if (!width) return;
-    const margin = { left: 92, right: 24, top: 16, bottom: 42 };
-    const laneHeight = GRAPH_LANE_HEIGHT;
-    const height = margin.top + signals.length * laneHeight + margin.bottom;
+    const wrap = $("graphCanvasWrap");
+    const width = wrap.clientWidth;
+    const height = wrap.clientHeight;
+    if (!width || !height) return;
     canvas.style.height = `${height}px`;
     const dpr = window.devicePixelRatio || 1;
     canvas.width = Math.round(width * dpr);
@@ -660,108 +663,129 @@ function drawGraphCanvas(hoverTime = null) {
     const firstTime = Math.min(...availableHistories.map((history) => history[0].time));
     const lastTime = Math.max(...availableHistories.map((history) => history[history.length - 1].time));
     const timeSpan = lastTime - firstTime;
-    const plotLeft = margin.left;
-    const plotRight = width - margin.right;
+    const plotLeft = 88;
+    const plotRight = width - 24 - Math.max(0, signals.length - 1) * GRAPH_AXIS_WIDTH;
     const plotWidth = plotRight - plotLeft;
-    const lanes = [];
+    const plotTop = 48;
+    const plotBottom = height - 46;
+    const plotHeight = plotBottom - plotTop;
+    if (plotWidth < 120 || plotHeight < 80) {
+        canvas.hidden = true;
+        empty.hidden = false;
+        empty.textContent = "The graph area is too narrow for the selected signals and their value scales. Widen the window or remove signals.";
+        state.graphDomain = null;
+        return;
+    }
 
-    context.font = "12px Inter, sans-serif";
-    context.textBaseline = "middle";
-    signals.forEach(({ key, sig, history }, index) => {
-        const laneTop = margin.top + index * laneHeight;
-        const plotTop = laneTop + 40;
-        const plotBottom = laneTop + laneHeight - 24;
-        const plotHeight = plotBottom - plotTop;
+    const series = signals.map(({ key, sig, history }) => {
         const color = graphColorFor(key);
-        context.fillStyle = color;
-        context.fillRect(plotLeft, laneTop + 9, 9, 9);
-        context.textAlign = "left";
-        context.fillStyle = "#e7e9ea";
-        context.font = "600 12px Inter, sans-serif";
-        context.fillText(sig.name, plotLeft + 16, laneTop + 14, Math.max(50, plotWidth * 0.48));
-        context.font = "11px Inter, sans-serif";
-        context.fillStyle = "#8a9199";
-        const stale = Date.now() - sig.updatedAt > STALE_MS;
-        const current = `${formatValue(sig)}${sig.unit ? ` ${sig.unit}` : ""}${stale ? " · stale" : ""}`;
-        context.fillText(current, plotLeft + 16, laneTop + 29, Math.max(50, plotWidth * 0.48));
-
-        if (!history.length) {
-            context.fillStyle = "#5c646c";
-            context.textAlign = "center";
-            context.fillText("No samples since graph history was cleared", plotLeft + plotWidth / 2, plotTop + plotHeight / 2);
-            lanes.push({ key, sig, history, plotTop, plotBottom, min: 0, max: 1 });
-            return;
+        let min = null;
+        let max = null;
+        if (history.length) {
+            min = Math.min(...history.map((point) => point.value));
+            max = Math.max(...history.map((point) => point.value));
+            const padding = min === max ? Math.abs(min) * 0.05 || 1 : (max - min) * 0.08;
+            min -= padding;
+            max += padding;
         }
+        return { key, sig, history, color, min, max, plotTop, plotBottom };
+    });
 
-        let min = Math.min(...history.map((point) => point.value));
-        let max = Math.max(...history.map((point) => point.value));
-        const padding = min === max ? Math.abs(min) * 0.05 || 1 : (max - min) * 0.08;
-        min -= padding;
-        max += padding;
-        context.textAlign = "right";
-        context.font = "11px Inter, sans-serif";
+    context.font = "11px Inter, sans-serif";
+    context.textAlign = "left";
+    context.textBaseline = "middle";
+    context.fillStyle = "#8a9199";
+    context.fillText("One shared time axis · each colored Y scale matches its signal", plotLeft, 19);
+
+    context.strokeStyle = "#33393f";
+    context.lineWidth = 1;
+    for (let tick = 0; tick <= 5; tick++) {
+        const ratio = tick / 5;
+        const y = plotBottom - ratio * plotHeight;
+        context.beginPath();
+        context.moveTo(plotLeft, y);
+        context.lineTo(plotRight, y);
+        context.stroke();
+        const x = plotLeft + ratio * plotWidth;
+        context.beginPath();
+        context.moveTo(x, plotTop);
+        context.lineTo(x, plotBottom);
+        context.stroke();
+        context.textAlign = "center";
+        context.textBaseline = "top";
+        context.fillStyle = "#8a9199";
+        context.fillText(
+            new Date(firstTime + ratio * timeSpan).toLocaleTimeString([], { hour12: false }),
+            x,
+            plotBottom + 8
+        );
+    }
+
+    context.save();
+    context.translate(16, plotTop + plotHeight / 2);
+    context.rotate(-Math.PI / 2);
+    context.textAlign = "center";
+    context.textBaseline = "middle";
+    context.fillStyle = "#8a9199";
+    context.fillText("Signal values · color-coded scales", 0, 0);
+    context.restore();
+
+    for (const [index, item] of series.entries()) {
+        const axisX = index === 0 ? plotLeft : plotRight + 24 + (index - 1) * GRAPH_AXIS_WIDTH;
+        context.strokeStyle = item.color;
+        context.fillStyle = item.color;
+        context.lineWidth = 1;
+        context.beginPath();
+        context.moveTo(axisX, plotTop);
+        context.lineTo(axisX, plotBottom);
+        context.stroke();
+        if (!item.history.length) continue;
+
+        context.font = "10px Inter, sans-serif";
+        context.textAlign = index === 0 ? "right" : "left";
+        context.textBaseline = "middle";
         for (let tick = 0; tick <= 4; tick++) {
             const ratio = tick / 4;
             const y = plotBottom - ratio * plotHeight;
-            context.strokeStyle = "#33393f";
-            context.lineWidth = 1;
+            const labelX = index === 0 ? axisX - 6 : axisX + 5;
+            context.fillText(formatAxisValue(item.min + ratio * (item.max - item.min)), labelX, y, GRAPH_AXIS_WIDTH - 8);
             context.beginPath();
-            context.moveTo(plotLeft, y);
-            context.lineTo(plotRight, y);
+            context.moveTo(axisX - 3, y);
+            context.lineTo(axisX + 3, y);
             context.stroke();
-            context.fillStyle = "#8a9199";
-            context.fillText(formatAxisValue(min + ratio * (max - min)), plotLeft - 8, y);
         }
+
         context.save();
-        context.translate(13, plotTop + plotHeight / 2);
-        context.rotate(-Math.PI / 2);
+        context.translate(axisX, plotTop - 8);
         context.textAlign = "center";
-        context.fillStyle = color;
-        context.fillText(sig.unit ? `Value (${sig.unit})` : "Value", 0, 0);
+        context.textBaseline = "bottom";
+        context.fillText(item.sig.unit || item.sig.name, 0, 0, GRAPH_AXIS_WIDTH - 8);
         context.restore();
 
-        context.strokeStyle = color;
+        context.strokeStyle = item.color;
         context.lineWidth = 2;
         context.beginPath();
-        history.forEach((point, pointIndex) => {
-            const ratio = timeSpan
-                ? (point.time - firstTime) / timeSpan
-                : history.length > 1 ? pointIndex / (history.length - 1) : 0.5;
+        let started = false;
+        for (const point of item.history) {
+            if (!Number.isFinite(point.time) || !Number.isFinite(point.value)) continue;
+            const ratio = timeSpan ? (point.time - firstTime) / timeSpan : 1;
             const x = plotLeft + ratio * plotWidth;
-            const y = plotBottom - ((point.value - min) / (max - min)) * plotHeight;
-            if (pointIndex === 0) context.moveTo(x, y);
-            else context.lineTo(x, y);
-        });
-        context.stroke();
-        lanes.push({ key, sig, history, plotTop, plotBottom, min, max });
-
-        if (index < signals.length - 1) {
-            context.strokeStyle = "#282d32";
-            context.beginPath();
-            context.moveTo(0, laneTop + laneHeight - 1);
-            context.lineTo(width, laneTop + laneHeight - 1);
-            context.stroke();
+            const y = plotBottom - ((point.value - item.min) / (item.max - item.min)) * plotHeight;
+            if (!started) {
+                context.moveTo(x, y);
+                started = true;
+            } else {
+                context.lineTo(x, y);
+            }
         }
-    });
-
-    const timeAxisY = margin.top + signals.length * laneHeight - 19;
+        if (started) context.stroke();
+    }
     context.font = "11px Inter, sans-serif";
     context.textAlign = "center";
-    context.textBaseline = "top";
+    context.textBaseline = "bottom";
     context.fillStyle = "#8a9199";
-    for (let tick = 0; tick <= 5; tick++) {
-        const ratio = tick / 5;
-        const x = plotLeft + ratio * plotWidth;
-        const timestamp = firstTime + ratio * timeSpan;
-        context.strokeStyle = "#33393f";
-        context.beginPath();
-        context.moveTo(x, margin.top + 10);
-        context.lineTo(x, timeAxisY);
-        context.stroke();
-        context.fillText(new Date(timestamp).toLocaleTimeString([], { hour12: false }), x, timeAxisY + 3);
-    }
-    context.fillText("Time", plotLeft + plotWidth / 2, height - 14);
-    state.graphDomain = { firstTime, lastTime, plotLeft, plotRight, plotTop: margin.top + 10, plotBottom: timeAxisY, lanes };
+    context.fillText("Time", plotLeft + plotWidth / 2, height - 5);
+    state.graphDomain = { firstTime, lastTime, plotLeft, plotRight, plotTop, plotBottom, series };
 
     if (hoverTime !== null) drawGraphCrosshair(hoverTime);
 }
@@ -785,13 +809,13 @@ function drawGraphCrosshair(timestamp) {
     context.lineTo(x, domain.plotBottom);
     context.stroke();
     context.setLineDash([]);
-    for (const lane of domain.lanes) {
-        if (!lane.history.length) continue;
-        const point = lane.history.reduce((closest, candidate) =>
+    for (const series of domain.series) {
+        if (!series.history.length) continue;
+        const point = series.history.reduce((closest, candidate) =>
             Math.abs(candidate.time - timestamp) < Math.abs(closest.time - timestamp) ? candidate : closest
         );
-        const y = lane.plotBottom - ((point.value - lane.min) / (lane.max - lane.min)) * (lane.plotBottom - lane.plotTop);
-        context.fillStyle = graphColorFor(lane.key);
+        const y = series.plotBottom - ((point.value - series.min) / (series.max - series.min)) * (series.plotBottom - series.plotTop);
+        context.fillStyle = series.color;
         context.beginPath();
         context.arc(x, y, 4, 0, Math.PI * 2);
         context.fill();
@@ -823,13 +847,13 @@ function updateGraphTooltip(event) {
         Math.abs(point.time - timestamp) < Math.abs(closest.time - timestamp) ? point : closest
     );
     const lines = [`Time: ${new Date(timestamp).toISOString()}`];
-    for (const lane of domain.lanes) {
-        if (!lane.history.length) {
-            lines.push(`${lane.sig.name}: no samples`);
+    for (const series of domain.series) {
+        if (!series.history.length) {
+            lines.push(`${series.sig.name}: no samples`);
             continue;
         }
-        const point = closestTime(lane.history);
-        lines.push(`${lane.sig.name}: ${formatAxisValue(point.value)}${lane.sig.unit ? ` ${lane.sig.unit}` : ""} (${new Date(point.time).toISOString()})`);
+        const point = closestTime(series.history);
+        lines.push(`${series.sig.name}: ${formatAxisValue(point.value)}${series.sig.unit ? ` ${series.sig.unit}` : ""} (${new Date(point.time).toISOString()})`);
     }
     tooltip.textContent = lines.join("\n");
     tooltip.hidden = false;
