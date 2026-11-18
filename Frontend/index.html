@@ -147,8 +147,11 @@
 
                 <section class="screen" id="screen-ecu">
                     <div class="section">
-                        <div class="section-head"><div class="section-title"><span class="bar"></span>ECU Tests</div></div>
-                        <div class="panel unavailable-panel"><span class="pill idle">Unavailable</span><h2>No ECU test backend is configured</h2><p>The current FastAPI application provides the dashboard and DBC file only. No ECU test endpoint or test procedure is available, so this screen will not report simulated results.</p></div>
+                        <div class="section-head">
+                            <div class="section-title"><span class="bar"></span>Available tests</div>
+                            <div class="section-note">Click a test to expand · run one at a time</div>
+                        </div>
+                        <div id="test-list"></div>
                     </div>
                 </section>
 

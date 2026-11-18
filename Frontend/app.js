@@ -21,6 +21,7 @@ const state = {
     signals: new Map(),
     signalCards: new Map(),
     signalHistory: new Map(),
+    ecuTestResults: new Map(),
     rawBuffer: [],
     unmatchedIds: new Set(),
     firstUnmatchedFrame: null,
@@ -56,10 +57,12 @@ function useDbc(text, source) {
     state.signals.clear();
     state.signalCards.clear();
     state.signalHistory.clear();
+    state.ecuTestResults.clear();
     state.firstUnmatchedFrame = null;
     $("signalGrid").innerHTML = '<div class="bc-empty">Waiting for decoded CAN frames…</div>';
     $("dbcInfo").textContent = `Loaded ${source}: ${dbc.messageCount} messages, ${dbc.signalCount} signals.`;
     log(`DBC loaded from ${source}: ${dbc.messageCount} messages, ${dbc.signalCount} signals.`);
+    renderEcuTests();
 }
 
 $("dbcFile").addEventListener("change", async (event) => {
@@ -184,6 +187,272 @@ function handleFrame(frame) {
         });
         if (state.rawBuffer.length > RAW_ROWS) state.rawBuffer.length = RAW_ROWS;
         state.rawDirty = true;
+    }
+}
+
+// ---------------------------------------------------------------- ECU tests
+const ECU_CELL_SPREAD_LIMIT_MV = 200;
+const ECU_TESTS = [
+    {
+        id: "cell-spread",
+        name: "Cell voltage spread test",
+        instructions: [
+            "Ensure the vehicle is on its stand with ignition on.",
+            "Confirm the CAN tool is connected and communication is established.",
+            "Click Run test — cell voltage is read automatically over CAN."
+        ],
+        condition: "Delta voltage < 200mV across the pack",
+        kind: "cell"
+    },
+    {
+        id: "tpms",
+        name: "TPMS communication check",
+        instructions: [
+            "Ensure TPMS sensors are fitted and the vehicle is stationary.",
+            "Check for a TPMS CAN broadcast."
+        ],
+        condition: "TPMS CAN data received → Pass. No response → Fail when a configured observation timeout expires.",
+        unavailable: "The loaded BMS DBC does not define TPMS CAN signals or an observation timeout, so communication cannot be verified."
+    },
+    {
+        id: "imu",
+        name: "IMU calibration",
+        instructions: ["This test is not yet available for this vehicle model."],
+        condition: "To be developed",
+        unavailable: "IMU calibration is not configured for this vehicle model."
+    },
+    {
+        id: "rpm",
+        name: "RPM feedback smoothness",
+        instructions: [
+            "Place the vehicle on its main stand so the rear wheel spins freely.",
+            "Apply controller demand at low RPM.",
+            "Check for jittery RPM, motor stall or a Hall fault error code."
+        ],
+        condition: "Any jittery RPM, motor stall or Hall fault observed → Fail. If none are observed → Pass.",
+        unavailable: "The loaded BMS DBC does not provide the required RPM/controller signals or calibrated jitter criteria."
+    },
+    {
+        id: "odo",
+        name: "Odo config",
+        instructions: [
+            "Confirm the new odometer reading against the job card before changing it.",
+            "Enter your employee ID and the reason for the change.",
+            "The employee ID and reason must be saved to the job record before an ECU write."
+        ],
+        condition: "Enter the employee ID, reason and new ODO value; save the employee ID and reason to the job record, then send the ODO value to the ECU.",
+        unavailable: "Odometer writes are unavailable: no authorized ECU write or job-record API is configured. No CAN message will be sent.",
+        inputs: [
+            { label: "Employee ID", placeholder: "Required employee ID" },
+            { label: "Reason for change", placeholder: "Required reason for change" },
+            { label: "New ODO value (km)", placeholder: "Required odometer value" }
+        ]
+    },
+    {
+        id: "switch",
+        name: "Switch pulse check",
+        instructions: [
+            "Ask the technician to press each switch on the vehicle in turn.",
+            "The tool reads the CAN signal live and displays each switch response.",
+            "If a switch shows no response, check its wiring before continuing."
+        ],
+        condition: "CAN response when each switch is pressed → Pass. No response → Fail; check Vehicle Management → Repair & maintenance.",
+        unavailable: "Switch pulse checks are unavailable because this DBC has no configured switch-signal mapping.",
+        actions: ["Horn", "Left indicator", "Right indicator", "Headlight beam switch", "Kill switch"]
+    },
+    {
+        id: "throttle",
+        name: "Throttle check",
+        instructions: [
+            "Ask the technician to sweep the throttle smoothly from 0% to 100% directly on the vehicle.",
+            "Compare throttle percentage with signal voltage and check for noise, dead spots or sudden jumps.",
+            "Check each value against the threshold limits before deciding the result."
+        ],
+        condition: "Check throttle input voltage, V5_Overvoltage_Fault, V5_Undervoltage_Fault, Throttle Fault, Throttle STB Error and Throttle STG Error. Out-of-limit values → Fail and display the error code. If within limits, an unsuccessful sweep → Fail; a smooth sweep → Pass.",
+        unavailable: "Throttle test signals and calibrated threshold limits are not configured in the loaded BMS DBC."
+    }
+];
+
+function getCellVoltageDefinitions() {
+    if (!state.dbc) return [];
+    return [...state.dbc.messages.values()].flatMap((message) =>
+        message.signals
+            .filter((signal) => /^cell\d+volt$/i.test(signal.name.replace(/[^a-z\d]/gi, "")))
+            .map((signal) => ({
+                key: `${message.name}.${signal.name}`,
+                name: signal.name,
+                unit: signal.unit
+            }))
+    );
+}
+
+function getCellVoltageReadings() {
+    if (!state.dbc) {
+        return { available: false, reason: "Load the BMS DBC before running this test." };
+    }
+    if (!state.transport || state.transport instanceof SimulatorTransport) {
+        return { available: false, reason: "Connect a PCAN-USB or SLCAN adapter. Simulator data is not accepted for ECU tests." };
+    }
+
+    const definitions = getCellVoltageDefinitions();
+    if (definitions.length < 2) {
+        return { available: false, reason: "The loaded DBC does not define individual cell-voltage signals." };
+    }
+
+    const now = Date.now();
+    const readings = [];
+    for (const definition of definitions) {
+        const signal = state.signals.get(definition.key);
+        if (!signal || !Number.isFinite(signal.value) || now - signal.updatedAt > STALE_MS) {
+            return {
+                available: false,
+                reason: `Waiting for fresh CAN readings from all ${definitions.length} cell-voltage signals.`
+            };
+        }
+
+        const unit = String(signal.unit || definition.unit).trim().toLowerCase();
+        if (unit !== "mv" && unit !== "v") {
+            return {
+                available: false,
+                reason: `Cannot evaluate ${definition.name}: its DBC unit must be mV or V.`
+            };
+        }
+        readings.push({
+            name: definition.name,
+            valueMv: unit === "v" ? signal.value * 1000 : signal.value
+        });
+    }
+
+    return { available: true, readings };
+}
+
+function createEcuTestRows() {
+    const list = $("test-list");
+    if (!list) return;
+
+    for (const test of ECU_TESTS) {
+        const row = document.createElement("div");
+        row.className = "test-row";
+        const actions = test.actions
+            ? `<div class="checklist">${test.actions.map((action) =>
+                `<div class="check-item"><span class="ci-label">${action}</span><span class="pill inactive"><span class="pdot"></span>Unavailable</span></div>`
+            ).join("")}</div>`
+            : "";
+        const inputs = test.inputs
+            ? `<div class="ecu-test-inputs">${test.inputs.map((input) =>
+                `<div class="field"><label>${input.label}</label><input type="text" placeholder="${input.placeholder}" disabled></div>`
+            ).join("")}</div>`
+            : "";
+        const runButton = test.kind === "cell"
+            ? `<button class="btn sm" type="button" data-ecu-run="${test.id}">Run test</button>`
+            : "";
+
+        row.innerHTML = `
+            <div class="test-row-head" role="button" tabindex="0" aria-expanded="false">
+                <svg class="chev" aria-hidden="true" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
+                <div class="test-name">${test.name}</div>
+                <span class="pill inactive" data-ecu-status="${test.id}"><span class="pdot"></span>Not available</span>
+            </div>
+            <div class="test-detail">
+                <div class="test-detail-inner">
+                    <div class="test-detail-col" style="flex-basis:100%;">
+                        <h4>How to run this test</h4>
+                        <ul>${test.instructions.map((instruction) => `<li>${instruction}</li>`).join("")}</ul>
+                    </div>
+                    <div class="test-detail-col">
+                        <h4>${test.kind === "cell" ? "Pass condition" : "Decision logic"}</h4>
+                        <p>${test.condition}</p>
+                    </div>
+                    <div class="test-detail-col">
+                        <h4>${test.inputs ? "Required before running" : test.actions ? "Live status" : "Result"}</h4>
+                        ${inputs}
+                        ${actions}
+                        <div class="test-result-msg" data-ecu-result="${test.id}"></div>
+                        ${runButton}
+                    </div>
+                </div>
+            </div>`;
+        list.appendChild(row);
+
+        const header = row.querySelector(".test-row-head");
+        const toggle = () => {
+            const detail = row.querySelector(".test-detail");
+            const open = !detail.classList.contains("open");
+            list.querySelectorAll(".test-detail.open").forEach((openDetail) => {
+                openDetail.classList.remove("open");
+                openDetail.previousElementSibling.querySelector(".chev").classList.remove("open");
+                openDetail.previousElementSibling.setAttribute("aria-expanded", "false");
+            });
+            detail.classList.toggle("open", open);
+            header.querySelector(".chev").classList.toggle("open", open);
+            header.setAttribute("aria-expanded", String(open));
+        };
+        header.addEventListener("click", toggle);
+        header.addEventListener("keydown", (event) => {
+            if (event.key === "Enter" || event.key === " ") {
+                event.preventDefault();
+                toggle();
+            }
+        });
+    }
+
+    list.querySelector('[data-ecu-run="cell-spread"]').addEventListener("click", runCellVoltageTest);
+}
+
+function setEcuTestResult(id, status, message) {
+    state.ecuTestResults.set(id, { status, message });
+    renderEcuTests();
+}
+
+function runCellVoltageTest() {
+    const data = getCellVoltageReadings();
+    if (!data.available) {
+        setEcuTestResult("cell-spread", "idle", data.reason);
+        return;
+    }
+
+    const minimum = data.readings.reduce((a, b) => a.valueMv <= b.valueMv ? a : b);
+    const maximum = data.readings.reduce((a, b) => a.valueMv >= b.valueMv ? a : b);
+    const spread = maximum.valueMv - minimum.valueMv;
+    const passed = spread < ECU_CELL_SPREAD_LIMIT_MV;
+    const format = (value) => `${Number(value.toFixed(1))}mV`;
+    const measuredRange = `Lowest ${minimum.name} ${format(minimum.valueMv)}; highest ${maximum.name} ${format(maximum.valueMv)}.`;
+    const message = passed
+        ? `Delta voltage ${format(spread)} is within the <200mV limit. ${measuredRange} Cell voltage imbalance not predicted.`
+        : `Delta voltage ${format(spread)} is not within the <200mV limit. ${measuredRange} Cell voltage imbalance predicted — flag for inspection.`;
+    setEcuTestResult("cell-spread", passed ? "pass" : "fail", message);
+}
+
+function renderEcuTests() {
+    const list = $("test-list");
+    if (!list) return;
+    if (!list.children.length) createEcuTestRows();
+
+    const cellData = getCellVoltageReadings();
+    for (const test of ECU_TESTS) {
+        const result = state.ecuTestResults.get(test.id);
+        const status = list.querySelector(`[data-ecu-status="${test.id}"]`);
+        const resultElement = list.querySelector(`[data-ecu-result="${test.id}"]`);
+        const runButton = list.querySelector(`[data-ecu-run="${test.id}"]`);
+
+        if (result) {
+            status.className = `pill ${result.status === "pass" || result.status === "fail" ? result.status : "inactive"}`;
+            status.innerHTML = `<span class="pdot"></span>${result.status === "pass" ? "Pass" : result.status === "fail" ? "Fail" : "Not available"}`;
+            resultElement.textContent = result.message;
+            resultElement.className = `test-result-msg${result.status === "pass" || result.status === "fail" ? ` ${result.status}` : ""}`;
+            if (runButton) runButton.disabled = !cellData.available;
+        } else if (test.kind === "cell") {
+            status.className = `pill ${cellData.available ? "idle" : "inactive"}`;
+            status.innerHTML = `<span class="pdot"></span>${cellData.available ? "Not run" : "Not available"}`;
+            resultElement.textContent = cellData.available
+                ? "Ready. Run the test to evaluate the current live cell-voltage readings."
+                : cellData.reason;
+            if (runButton) runButton.disabled = !cellData.available;
+        } else {
+            status.className = "pill inactive";
+            status.innerHTML = '<span class="pdot"></span>Not available';
+            resultElement.textContent = test.unavailable;
+        }
     }
 }
 
@@ -404,6 +673,7 @@ setInterval(() => {
     renderSignals();
     renderRaw();
     renderMetrics();
+    renderEcuTests();
 }, 250);
 
 setInterval(() => {
@@ -564,7 +834,7 @@ log("Ready. Load a DBC file, choose the adapter and click Connect.");
 
 const screenTitles = {
     dashboard: ["Dashboard", "Live vehicle overview"],
-    ecu: ["ECU Tests", "Test services unavailable"],
+    ecu: ["ECU Tests", "Run and review individual ECU checks"],
     live: ["Live Data", "Real-time values decoded from received CAN frames"],
     "vm-repair": ["Repair & Maintenance", "Repair workflow unavailable"],
     "vm-errors": ["Error Code Correction", "Vehicle DTC service unavailable"],
@@ -596,4 +866,5 @@ $("vm-toggle").addEventListener("click", () => {
     $("vm-toggle").setAttribute("aria-expanded", String(open));
 });
 
+renderEcuTests();
 updateSidebarStatus("Adapter disconnected.", "idle");
