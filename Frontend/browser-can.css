@@ -113,17 +113,6 @@ input[type="search"] { min-width: 220px; }
 .bc-btn-quiet { background: var(--blue-soft); border-color: transparent; color: var(--blue); }
 .bc-btn.recording { border-color: var(--red); background: var(--red); color: #fff; }
 
-.bc-file input { display: none; }
-.bc-file span {
-    display: inline-block;
-    padding: 9px 16px;
-    border-radius: 10px;
-    background: var(--blue);
-    color: #fff;
-    font-weight: 600;
-    cursor: pointer;
-}
-
 .bc-muted { color: var(--muted); font-size: 13px; margin: 10px 0 0; }
 
 .bc-help { margin-top: 14px; font-size: 13px; }

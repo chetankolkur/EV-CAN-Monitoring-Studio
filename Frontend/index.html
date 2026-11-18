@@ -34,8 +34,6 @@
                 </div>
             </nav>
             <div class="sidebar-foot">
-                <div class="tool-status"><span class="dot" id="sidebarStatusDot"></span><span id="canToolStatus">Adapter disconnected</span></div>
-                <div class="emp">LISTEN-ONLY MODE · No CAN messages transmitted</div>
             </div>
         </aside>
 
@@ -46,8 +44,6 @@
                     <div class="page-crumb" id="page-crumb">Live vehicle overview</div>
                 </div>
                 <div class="vehicle-chip">
-                    <div class="vc-field"><span class="vc-label">VEHICLE</span><span class="vc-value">Not identified</span></div>
-                    <div class="vc-divider"></div>
                     <div class="vc-field"><span class="vc-label">CAN ADAPTER</span><span class="vc-value" id="statusText">Adapter disconnected.</span></div>
                     <span id="statusDot" class="bc-dot"></span>
                 </div>
@@ -59,38 +55,13 @@
                 </div>
 
                 <section class="screen active" id="screen-dashboard">
-                    <div class="banner info">
-                        <div class="banner-left">
-                            <span class="banner-symbol" aria-hidden="true">i</span>
-                            <div>
-                                <div class="banner-title">Connect to a vehicle to view live CAN data</div>
-                                <div class="section-note">Vehicle identity, diagnostic trouble codes, ECU tests, firmware and parts data are not provided by the current backend.</div>
-                            </div>
-                        </div>
-                        <button class="btn sm" type="button" data-screen="live">Open Live Data</button>
-                    </div>
-
-                    <div class="section">
-                        <div class="section-head">
-                            <div class="section-title"><span class="bar"></span>CAN session</div>
-                            <div class="section-note">Values below update from frames received by this browser.</div>
-                        </div>
-                        <div class="stat-grid">
-                            <div class="stat"><div class="stat-label">Frames received</div><div class="stat-value" id="mFrames">0</div></div>
-                            <div class="stat"><div class="stat-label">Frames / second</div><div class="stat-value" id="mRate">0</div></div>
-                            <div class="stat"><div class="stat-label">Unique CAN IDs</div><div class="stat-value" id="mIds">0</div></div>
-                            <div class="stat"><div class="stat-label">DBC-decoded frames</div><div class="stat-value" id="mDecoded">0</div></div>
-                        </div>
-                    </div>
-
                     <div class="section">
                         <div class="section-head"><div class="section-title"><span class="bar"></span>Connection setup</div></div>
                         <section class="panel setup-panel">
                             <div class="panel-heading">
-                                <div><div class="section-kicker">SETUP · DBC</div><h2>Load signal definitions</h2><p>Use the existing server DBC proxy or choose a local DBC file.</p></div>
+                                <div><div class="section-kicker">SETUP · DBC</div><h2>Load signal definitions</h2><p>Load the BMS DBC from the server.</p></div>
                             </div>
                             <div class="bc-row">
-                                <label class="bc-file"><input type="file" id="dbcFile" accept=".dbc,text/plain"><span>Choose .dbc file</span></label>
                                 <button id="dbcAwsBtn" class="btn" type="button">Load BMS DBC from server</button>
                             </div>
                             <p class="bc-muted" id="dbcInfo">No DBC loaded.</p>
@@ -117,7 +88,7 @@
                                         <option value="10000">10 kbit/s</option>
                                     </select>
                                 </label>
-                                <label class="bc-check"><input type="checkbox" id="listenOnly" checked> Listen-only (never transmit / ACK)</label>
+                                <input type="checkbox" id="listenOnly" hidden>
                             </div>
                             <p class="transport-notice" id="transportNotice" hidden>Simulator mode generates synthetic CAN frames for interface testing; these are not vehicle readings.</p>
                             <div class="bc-row setup-actions">
@@ -135,14 +106,6 @@
                         </section>
                     </div>
 
-                    <div class="section">
-                        <div class="section-head"><div class="section-title"><span class="bar"></span>Diagnostic capabilities</div></div>
-                        <div class="shortcut-grid">
-                            <button class="shortcut" type="button" data-screen="ecu"><span class="shortcut-title">ECU Tests</span><span class="shortcut-desc">Unavailable: no ECU test API is configured.</span></button>
-                            <button class="shortcut" type="button" data-screen="vm-errors"><span class="shortcut-title">Error codes</span><span class="shortcut-desc">Unavailable: no vehicle DTC API is configured.</span></button>
-                            <button class="shortcut" type="button" data-screen="vm-software"><span class="shortcut-title">Software update</span><span class="shortcut-desc">Unavailable: no firmware inventory or flashing API is configured.</span></button>
-                        </div>
-                    </div>
                 </section>
 
                 <section class="screen" id="screen-ecu">
@@ -168,7 +131,7 @@
                         </div>
                         <div id="signalGrid" class="bc-signal-grid"><div class="bc-empty">Load a DBC and connect an adapter to view live signals.</div></div>
                     </div>
-                    <div class="section">
+                    <div class="section" hidden>
                         <div class="section-head">
                             <div><div class="section-title"><span class="bar"></span>Raw CAN frames</div><div class="section-note">Received frames; no messages are transmitted.</div></div>
                             <div class="bc-row">

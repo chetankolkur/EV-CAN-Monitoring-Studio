@@ -45,8 +45,10 @@ function setStatus(text, level = "idle") {
 }
 
 function updateSidebarStatus(text, level = "idle") {
-    $("canToolStatus").textContent = text;
-    $("sidebarStatusDot").className = `dot ${level === "ok" ? "connected" : level === "error" ? "error" : ""}`;
+    const sidebarStatus = $("canToolStatus");
+    const sidebarDot = $("sidebarStatusDot");
+    if (sidebarStatus) sidebarStatus.textContent = text;
+    if (sidebarDot) sidebarDot.className = `dot ${level === "ok" ? "connected" : level === "error" ? "error" : ""}`;
 }
 
 // ---------------------------------------------------------------- DBC
@@ -64,17 +66,6 @@ function useDbc(text, source) {
     log(`DBC loaded from ${source}: ${dbc.messageCount} messages, ${dbc.signalCount} signals.`);
     renderEcuTests();
 }
-
-$("dbcFile").addEventListener("change", async (event) => {
-    const file = event.target.files[0];
-    if (!file) return;
-    try {
-        useDbc(await file.text(), file.name);
-    } catch (err) {
-        $("dbcInfo").textContent = `Could not parse ${file.name}: ${err.message}`;
-        log(`DBC error: ${err.message}`);
-    }
-});
 
 async function fetchDbcFromAws() {
     const meta = await fetch(DBC_API_URL);
@@ -107,7 +98,7 @@ $("dbcAwsBtn").addEventListener("click", async () => {
         }
         useDbc(text, "server (bms.dbc)");
     } catch (err) {
-        $("dbcInfo").textContent = `Could not download the DBC: ${err.message}. Choose the .dbc file manually instead.`;
+        $("dbcInfo").textContent = `Could not download the DBC: ${err.message}. Check the server connection and try again.`;
         log(`DBC download error: ${err.message}`);
     } finally {
         btn.disabled = false;
@@ -658,10 +649,7 @@ function renderRaw() {
     body.replaceChildren(...rows);
 }
 
-function renderMetrics() {
-    $("mFrames").textContent = state.totalFrames.toLocaleString();
-    $("mIds").textContent = state.uniqueIds.size;
-    $("mDecoded").textContent = state.decodedFrames.toLocaleString();
+function renderUnmatchedInfo() {
     const hidden = state.unmatchedIds.size;
     $("unmatchedInfo").textContent = hidden && $("onlyDbc").checked
         ? `(${hidden} ID${hidden === 1 ? "" : "s"} not in DBC hidden)`
@@ -672,12 +660,11 @@ function renderMetrics() {
 setInterval(() => {
     renderSignals();
     renderRaw();
-    renderMetrics();
+    renderUnmatchedInfo();
     renderEcuTests();
 }, 250);
 
 setInterval(() => {
-    $("mRate").textContent = state.framesThisSecond;
     state.framesThisSecond = 0;
     if (state.transport && state.lastFrameAt && Date.now() - state.lastFrameAt > STALE_MS) {
         const text = "Connected · no CAN traffic for 3 s (check bus power, wiring, bitrate)";
