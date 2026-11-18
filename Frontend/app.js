@@ -8,6 +8,7 @@ const RAW_ROWS = 200;
 const STALE_MS = 3000;
 const MAX_SIGNAL_HISTORY = 120;
 const SIGNAL_CHART_HEIGHT = 340;
+const GRAPH_LANE_HEIGHT = 210;
 
 const $ = (id) => document.getElementById(id);
 
@@ -21,6 +22,15 @@ const state = {
     signals: new Map(),
     signalRows: new Map(),
     signalHistory: new Map(),
+    graphSignals: new Set(),
+    graphColors: new Map(),
+    nextGraphColor: 0,
+    graphPaused: false,
+    graphClearAfter: 0,
+    graphPickerSignature: "",
+    graphLegendSignature: "",
+    graphDomain: null,
+    graphHoverPosition: null,
     ecuTestResults: new Map(),
     rawBuffer: [],
     unmatchedIds: new Set(),
@@ -59,9 +69,20 @@ function useDbc(text, source) {
     state.signals.clear();
     state.signalRows.clear();
     state.signalHistory.clear();
+    state.graphSignals.clear();
+    state.graphColors.clear();
+    state.nextGraphColor = 0;
+    state.graphPaused = false;
+    state.graphClearAfter = 0;
+    state.graphPickerSignature = "";
+    state.graphLegendSignature = "";
+    state.graphDomain = null;
+    state.graphHoverPosition = null;
     state.ecuTestResults.clear();
     state.firstUnmatchedFrame = null;
     $("signalGrid").innerHTML = '<div class="bc-empty">Waiting for decoded CAN frames…</div>';
+    renderGraphSignalPicker(true);
+    renderGraphView(true);
     $("dbcInfo").textContent = `Loaded ${source}: ${dbc.messageCount} messages, ${dbc.signalCount} signals.`;
     log(`DBC loaded from ${source}: ${dbc.messageCount} messages, ${dbc.signalCount} signals.`);
     renderEcuTests();
@@ -459,6 +480,369 @@ function formatAxisValue(value) {
     return Number(value.toPrecision(4)).toString();
 }
 
+function graphHistoryFor(key) {
+    return (state.signalHistory.get(key) || []).filter((point) => point.time >= state.graphClearAfter);
+}
+
+function graphColorFor(key) {
+    if (!state.graphColors.has(key)) {
+        const index = state.nextGraphColor++;
+        state.graphColors.set(key, `hsl(${(index * 137.508) % 360} 72% 62%)`);
+    }
+    return state.graphColors.get(key);
+}
+
+function renderGraphSignalPicker(force = false) {
+    const results = $("graphSignalResults");
+    const search = $("graphSignalSearch").value.trim().toLowerCase();
+    const keys = [...state.signals.keys()].sort();
+    const signature = `${search}\n${keys.join("\n")}\n${[...state.graphSignals].sort().join("\n")}`;
+    if (!force && signature === state.graphPickerSignature) {
+        for (const option of results.querySelectorAll(".graph-signal-option")) {
+            const sig = state.signals.get(option.dataset.signalKey);
+            if (sig) {
+                option.querySelector(".graph-signal-option-value").textContent =
+                    `${formatValue(sig)}${sig.unit ? ` ${sig.unit}` : ""}`;
+            }
+        }
+        return;
+    }
+    state.graphPickerSignature = signature;
+
+    const matches = keys.filter((key) => {
+        const sig = state.signals.get(key);
+        return `${sig.name} ${key}`.toLowerCase().includes(search);
+    });
+    if (!matches.length) {
+        results.innerHTML = `<div class="bc-empty">${keys.length ? "No decoded signals match this search." : "Load a DBC and receive decoded CAN frames to select signals."}</div>`;
+        return;
+    }
+
+    const fragment = document.createDocumentFragment();
+    for (const key of matches) {
+        const sig = state.signals.get(key);
+        const label = document.createElement("label");
+        label.className = "graph-signal-option";
+        label.dataset.signalKey = key;
+        const checkbox = document.createElement("input");
+        checkbox.type = "checkbox";
+        checkbox.checked = state.graphSignals.has(key);
+        checkbox.setAttribute("aria-label", `Plot ${sig.name}`);
+        checkbox.addEventListener("change", () => {
+            if (checkbox.checked) {
+                state.graphSignals.add(key);
+                graphColorFor(key);
+            } else {
+                state.graphSignals.delete(key);
+            }
+            state.graphPickerSignature = "";
+            state.graphLegendSignature = "";
+            renderGraphSignalPicker(true);
+            renderGraphView(true);
+        });
+        const name = document.createElement("span");
+        name.className = "graph-signal-option-name";
+        name.textContent = sig.name;
+        const value = document.createElement("span");
+        value.className = "graph-signal-option-value";
+        value.textContent = `${formatValue(sig)}${sig.unit ? ` ${sig.unit}` : ""}`;
+        label.append(checkbox, name, value);
+        fragment.appendChild(label);
+    }
+    results.replaceChildren(fragment);
+}
+
+function renderGraphLegend() {
+    const legend = $("graphLegend");
+    const keys = [...state.graphSignals];
+    const signature = keys.join("\n");
+    if (signature !== state.graphLegendSignature) {
+        state.graphLegendSignature = signature;
+        const fragment = document.createDocumentFragment();
+        for (const key of keys) {
+            const sig = state.signals.get(key);
+            if (!sig) continue;
+            const item = document.createElement("div");
+            item.className = "graph-legend-item";
+            item.dataset.signalKey = key;
+            const swatch = document.createElement("span");
+            swatch.className = "graph-legend-swatch";
+            swatch.style.backgroundColor = graphColorFor(key);
+            const name = document.createElement("span");
+            name.className = "graph-legend-name";
+            name.textContent = sig.name;
+            const current = document.createElement("span");
+            current.className = "graph-legend-current";
+            const remove = document.createElement("button");
+            remove.type = "button";
+            remove.className = "graph-legend-remove";
+            remove.textContent = "×";
+            remove.setAttribute("aria-label", `Remove ${sig.name} from graph`);
+            remove.addEventListener("click", () => {
+                state.graphSignals.delete(key);
+                state.graphPickerSignature = "";
+                state.graphLegendSignature = "";
+                renderGraphSignalPicker(true);
+                renderGraphView(true);
+            });
+            item.append(swatch, name, current, remove);
+            fragment.appendChild(item);
+        }
+        legend.replaceChildren(fragment);
+    }
+
+    const now = Date.now();
+    for (const item of legend.children) {
+        const key = item.dataset.signalKey;
+        const sig = state.signals.get(key);
+        if (!sig) continue;
+        const current = item.querySelector(".graph-legend-current");
+        current.textContent = `${formatValue(sig)}${sig.unit ? ` ${sig.unit}` : ""}`;
+        item.classList.toggle("stale", now - sig.updatedAt > STALE_MS);
+    }
+}
+
+function renderGraphView(force = false) {
+    $("graphPauseBtn").disabled = state.graphSignals.size === 0;
+    $("graphPauseBtn").textContent = state.graphPaused ? "Resume" : "Pause";
+    $("graphPauseBtn").setAttribute("aria-pressed", String(state.graphPaused));
+    $("graphClearBtn").disabled = state.graphSignals.size === 0;
+    renderGraphSignalPicker();
+    renderGraphLegend();
+
+    const canvas = $("graphCanvas");
+    const empty = $("graphEmpty");
+    if (!state.graphSignals.size) {
+        canvas.hidden = true;
+        empty.hidden = false;
+        empty.textContent = "Search for decoded signals and select them to start plotting.";
+        state.graphDomain = null;
+        $("graphTooltip").hidden = true;
+        return;
+    }
+    if ((state.graphPaused && !force) || !$("screen-graph").classList.contains("active")) return;
+    if (state.graphHoverPosition) updateGraphTooltip(state.graphHoverPosition);
+    else drawGraphCanvas();
+}
+
+function drawGraphCanvas(hoverTime = null) {
+    const canvas = $("graphCanvas");
+    const signals = [...state.graphSignals].map((key) => ({
+        key, sig: state.signals.get(key), history: graphHistoryFor(key)
+    })).filter((item) => item.sig);
+    const availableHistories = signals.map((item) => item.history).filter((history) => history.length);
+    const empty = $("graphEmpty");
+    if (!signals.length || !availableHistories.length) {
+        canvas.hidden = true;
+        empty.hidden = false;
+        empty.textContent = state.graphClearAfter
+            ? "Waiting for new CAN samples after clearing graph history."
+            : "Waiting for numeric decoded CAN samples for the selected signals.";
+        state.graphDomain = null;
+        return;
+    }
+    canvas.hidden = false;
+    empty.hidden = true;
+
+    const width = $("graphCanvasWrap").clientWidth;
+    if (!width) return;
+    const margin = { left: 92, right: 24, top: 16, bottom: 42 };
+    const laneHeight = GRAPH_LANE_HEIGHT;
+    const height = margin.top + signals.length * laneHeight + margin.bottom;
+    canvas.style.height = `${height}px`;
+    const dpr = window.devicePixelRatio || 1;
+    canvas.width = Math.round(width * dpr);
+    canvas.height = Math.round(height * dpr);
+    const context = canvas.getContext("2d");
+    context.setTransform(dpr, 0, 0, dpr, 0, 0);
+    context.clearRect(0, 0, width, height);
+
+    const firstTime = Math.min(...availableHistories.map((history) => history[0].time));
+    const lastTime = Math.max(...availableHistories.map((history) => history[history.length - 1].time));
+    const timeSpan = lastTime - firstTime;
+    const plotLeft = margin.left;
+    const plotRight = width - margin.right;
+    const plotWidth = plotRight - plotLeft;
+    const lanes = [];
+
+    context.font = "12px Inter, sans-serif";
+    context.textBaseline = "middle";
+    signals.forEach(({ key, sig, history }, index) => {
+        const laneTop = margin.top + index * laneHeight;
+        const plotTop = laneTop + 40;
+        const plotBottom = laneTop + laneHeight - 24;
+        const plotHeight = plotBottom - plotTop;
+        const color = graphColorFor(key);
+        context.fillStyle = color;
+        context.fillRect(plotLeft, laneTop + 9, 9, 9);
+        context.textAlign = "left";
+        context.fillStyle = "#e7e9ea";
+        context.font = "600 12px Inter, sans-serif";
+        context.fillText(sig.name, plotLeft + 16, laneTop + 14, Math.max(50, plotWidth * 0.48));
+        context.font = "11px Inter, sans-serif";
+        context.fillStyle = "#8a9199";
+        const stale = Date.now() - sig.updatedAt > STALE_MS;
+        const current = `${formatValue(sig)}${sig.unit ? ` ${sig.unit}` : ""}${stale ? " · stale" : ""}`;
+        context.fillText(current, plotLeft + 16, laneTop + 29, Math.max(50, plotWidth * 0.48));
+
+        if (!history.length) {
+            context.fillStyle = "#5c646c";
+            context.textAlign = "center";
+            context.fillText("No samples since graph history was cleared", plotLeft + plotWidth / 2, plotTop + plotHeight / 2);
+            lanes.push({ key, sig, history, plotTop, plotBottom, min: 0, max: 1 });
+            return;
+        }
+
+        let min = Math.min(...history.map((point) => point.value));
+        let max = Math.max(...history.map((point) => point.value));
+        const padding = min === max ? Math.abs(min) * 0.05 || 1 : (max - min) * 0.08;
+        min -= padding;
+        max += padding;
+        context.textAlign = "right";
+        context.font = "11px Inter, sans-serif";
+        for (let tick = 0; tick <= 4; tick++) {
+            const ratio = tick / 4;
+            const y = plotBottom - ratio * plotHeight;
+            context.strokeStyle = "#33393f";
+            context.lineWidth = 1;
+            context.beginPath();
+            context.moveTo(plotLeft, y);
+            context.lineTo(plotRight, y);
+            context.stroke();
+            context.fillStyle = "#8a9199";
+            context.fillText(formatAxisValue(min + ratio * (max - min)), plotLeft - 8, y);
+        }
+        context.save();
+        context.translate(13, plotTop + plotHeight / 2);
+        context.rotate(-Math.PI / 2);
+        context.textAlign = "center";
+        context.fillStyle = color;
+        context.fillText(sig.unit ? `Value (${sig.unit})` : "Value", 0, 0);
+        context.restore();
+
+        context.strokeStyle = color;
+        context.lineWidth = 2;
+        context.beginPath();
+        history.forEach((point, pointIndex) => {
+            const ratio = timeSpan
+                ? (point.time - firstTime) / timeSpan
+                : history.length > 1 ? pointIndex / (history.length - 1) : 0.5;
+            const x = plotLeft + ratio * plotWidth;
+            const y = plotBottom - ((point.value - min) / (max - min)) * plotHeight;
+            if (pointIndex === 0) context.moveTo(x, y);
+            else context.lineTo(x, y);
+        });
+        context.stroke();
+        lanes.push({ key, sig, history, plotTop, plotBottom, min, max });
+
+        if (index < signals.length - 1) {
+            context.strokeStyle = "#282d32";
+            context.beginPath();
+            context.moveTo(0, laneTop + laneHeight - 1);
+            context.lineTo(width, laneTop + laneHeight - 1);
+            context.stroke();
+        }
+    });
+
+    const timeAxisY = margin.top + signals.length * laneHeight - 19;
+    context.font = "11px Inter, sans-serif";
+    context.textAlign = "center";
+    context.textBaseline = "top";
+    context.fillStyle = "#8a9199";
+    for (let tick = 0; tick <= 5; tick++) {
+        const ratio = tick / 5;
+        const x = plotLeft + ratio * plotWidth;
+        const timestamp = firstTime + ratio * timeSpan;
+        context.strokeStyle = "#33393f";
+        context.beginPath();
+        context.moveTo(x, margin.top + 10);
+        context.lineTo(x, timeAxisY);
+        context.stroke();
+        context.fillText(new Date(timestamp).toLocaleTimeString([], { hour12: false }), x, timeAxisY + 3);
+    }
+    context.fillText("Time", plotLeft + plotWidth / 2, height - 14);
+    state.graphDomain = { firstTime, lastTime, plotLeft, plotRight, plotTop: margin.top + 10, plotBottom: timeAxisY, lanes };
+
+    if (hoverTime !== null) drawGraphCrosshair(hoverTime);
+}
+
+function drawGraphCrosshair(timestamp) {
+    const canvas = $("graphCanvas");
+    const domain = state.graphDomain;
+    if (!domain || canvas.hidden) return;
+    const context = canvas.getContext("2d");
+    const dpr = window.devicePixelRatio || 1;
+    const x = domain.plotLeft + (domain.lastTime === domain.firstTime
+        ? 1
+        : (timestamp - domain.firstTime) / (domain.lastTime - domain.firstTime)) * (domain.plotRight - domain.plotLeft);
+    context.save();
+    context.setTransform(dpr, 0, 0, dpr, 0, 0);
+    context.strokeStyle = "#d9dde1";
+    context.lineWidth = 1;
+    context.setLineDash([4, 4]);
+    context.beginPath();
+    context.moveTo(x, domain.plotTop);
+    context.lineTo(x, domain.plotBottom);
+    context.stroke();
+    context.setLineDash([]);
+    for (const lane of domain.lanes) {
+        if (!lane.history.length) continue;
+        const point = lane.history.reduce((closest, candidate) =>
+            Math.abs(candidate.time - timestamp) < Math.abs(closest.time - timestamp) ? candidate : closest
+        );
+        const y = lane.plotBottom - ((point.value - lane.min) / (lane.max - lane.min)) * (lane.plotBottom - lane.plotTop);
+        context.fillStyle = graphColorFor(lane.key);
+        context.beginPath();
+        context.arc(x, y, 4, 0, Math.PI * 2);
+        context.fill();
+    }
+    context.restore();
+}
+
+function updateGraphTooltip(event) {
+    state.graphHoverPosition = { clientX: event.clientX, clientY: event.clientY };
+    const canvas = $("graphCanvas");
+    const domain = state.graphDomain;
+    const tooltip = $("graphTooltip");
+    if (!domain || canvas.hidden || state.graphPaused) {
+        tooltip.hidden = true;
+        return;
+    }
+    const rect = canvas.getBoundingClientRect();
+    const x = event.clientX - rect.left;
+    if (x < domain.plotLeft || x > domain.plotRight) {
+        tooltip.hidden = true;
+        drawGraphCanvas();
+        return;
+    }
+    const ratio = (x - domain.plotLeft) / (domain.plotRight - domain.plotLeft);
+    const timestamp = domain.firstTime + ratio * (domain.lastTime - domain.firstTime);
+    drawGraphCanvas(timestamp);
+
+    const closestTime = (history) => history.reduce((closest, point) =>
+        Math.abs(point.time - timestamp) < Math.abs(closest.time - timestamp) ? point : closest
+    );
+    const lines = [`Time: ${new Date(timestamp).toISOString()}`];
+    for (const lane of domain.lanes) {
+        if (!lane.history.length) {
+            lines.push(`${lane.sig.name}: no samples`);
+            continue;
+        }
+        const point = closestTime(lane.history);
+        lines.push(`${lane.sig.name}: ${formatAxisValue(point.value)}${lane.sig.unit ? ` ${lane.sig.unit}` : ""} (${new Date(point.time).toISOString()})`);
+    }
+    tooltip.textContent = lines.join("\n");
+    tooltip.hidden = false;
+    const wrap = $("graphCanvasWrap");
+    const wrapRect = wrap.getBoundingClientRect();
+    const minLeft = wrap.scrollLeft + 8;
+    const maxLeft = wrap.scrollLeft + wrap.clientWidth - tooltip.offsetWidth - 8;
+    const minTop = wrap.scrollTop + 8;
+    const maxTop = wrap.scrollTop + wrap.clientHeight - tooltip.offsetHeight - 8;
+    tooltip.style.left = `${Math.max(minLeft, Math.min(maxLeft, event.clientX - wrapRect.left + wrap.scrollLeft + 14))}px`;
+    tooltip.style.top = `${Math.max(minTop, Math.min(maxTop, event.clientY - wrapRect.top + wrap.scrollTop + 14))}px`;
+}
+
 function drawSignalChart(key, canvas) {
     const sig = state.signals.get(key);
     const history = state.signalHistory.get(key) || [];
@@ -699,6 +1083,7 @@ function renderUnmatchedInfo() {
 
 setInterval(() => {
     renderSignals();
+    renderGraphView();
     renderRaw();
     renderUnmatchedInfo();
     renderEcuTests();
@@ -721,6 +1106,29 @@ setInterval(() => {
 
 $("signalSearch").addEventListener("input", renderSignals);
 window.addEventListener("resize", renderSignals);
+$("graphSignalSearch").addEventListener("input", () => renderGraphSignalPicker(true));
+$("graphPauseBtn").addEventListener("click", () => {
+    state.graphPaused = !state.graphPaused;
+    state.graphHoverPosition = null;
+    $("graphTooltip").hidden = true;
+    renderGraphView(true);
+});
+$("graphClearBtn").addEventListener("click", () => {
+    state.graphClearAfter = Date.now();
+    state.graphHoverPosition = null;
+    $("graphTooltip").hidden = true;
+    renderGraphView(true);
+});
+$("graphCanvas").addEventListener("mousemove", updateGraphTooltip);
+$("graphCanvas").addEventListener("mouseleave", () => {
+    state.graphHoverPosition = null;
+    $("graphTooltip").hidden = true;
+    if (!state.graphPaused) drawGraphCanvas();
+});
+window.addEventListener("resize", () => renderGraphView(true));
+new ResizeObserver(() => {
+    if ($("screen-graph").classList.contains("active") && !state.graphPaused) drawGraphCanvas();
+}).observe($("graphCanvasWrap"));
 $("clearBtn").addEventListener("click", () => {
     state.rawBuffer = [];
     state.rawDirty = true;
@@ -864,6 +1272,7 @@ const screenTitles = {
     dashboard: ["Dashboard", "Live vehicle overview"],
     ecu: ["ECU Tests", "Run and review individual ECU checks"],
     live: ["Live Data", "Real-time values decoded from received CAN frames"],
+    graph: ["Graph View", "Live decoded CAN signal trends"],
     "vm-repair": ["Repair & Maintenance", "Repair workflow unavailable"],
     "vm-errors": ["Error Code Correction", "Vehicle DTC service unavailable"],
     "vm-software": ["Software Update", "Firmware service unavailable"],
@@ -882,6 +1291,7 @@ function goScreen(id) {
     $("page-title").textContent = title[0];
     $("page-crumb").textContent = title[1];
     document.querySelector(".content").scrollTop = 0;
+    if (id === "graph") renderGraphView();
 }
 
 document.querySelectorAll("[data-screen]").forEach((item) => {
@@ -896,3 +1306,4 @@ $("vm-toggle").addEventListener("click", () => {
 
 renderEcuTests();
 updateSidebarStatus("Adapter disconnected.", "idle");
+renderGraphSignalPicker(true);

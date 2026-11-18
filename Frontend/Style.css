@@ -364,6 +364,53 @@ hr.soft{border:none;border-top:1px solid var(--border-soft);margin:22px 0;}
 .unavailable-panel p{max-width:680px;color:var(--text-dim);font-size:13px;}
 footer.footnote{display:flex;justify-content:space-between;gap:12px;margin-top:24px;padding-top:12px;border-top:1px solid var(--border-soft);}
 
+.graph-controls{display:flex;gap:8px;flex-wrap:wrap;}
+.graph-picker{display:grid;grid-template-columns:minmax(0, 1fr);gap:7px;margin:0 0 16px;}
+.graph-picker>label{font-size:12px;font-weight:600;color:var(--text-dim);}
+#graphSignalSearch{
+  width:min(100%, 560px);padding:10px 12px;background:var(--bg);
+  border:1px solid var(--border);border-radius:var(--radius);color:var(--text);
+}
+.graph-signal-results{
+  display:grid;grid-template-columns:repeat(auto-fill, minmax(min(100%, 260px), 1fr));
+  gap:7px;max-height:210px;overflow:auto;padding:2px;
+}
+.graph-signal-option{
+  display:flex;align-items:center;gap:9px;min-width:0;padding:9px 10px;
+  background:var(--surface);border:1px solid var(--border-soft);border-radius:var(--radius);
+  cursor:pointer;
+}
+.graph-signal-option:hover{background:var(--surface-hover);}
+.graph-signal-option input{flex:0 0 auto;accent-color:var(--accent);}
+.graph-signal-option-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px;font-weight:600;}
+.graph-signal-option-value{margin-left:auto;color:var(--good);font-size:11px;font-variant-numeric:tabular-nums;white-space:nowrap;}
+.graph-legend{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 12px;}
+.graph-legend-item{
+  display:inline-flex;align-items:center;gap:7px;max-width:100%;padding:6px 8px;
+  background:var(--surface);border:1px solid var(--border-soft);border-radius:var(--radius);
+}
+.graph-legend-item.stale{opacity:.55;}
+.graph-legend-swatch{width:9px;height:9px;flex:0 0 9px;border-radius:50%;}
+.graph-legend-name{max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px;font-weight:600;}
+.graph-legend-current{color:var(--text-dim);font-size:11px;font-variant-numeric:tabular-nums;white-space:nowrap;}
+.graph-legend-remove{
+  width:22px;height:22px;padding:0;border:0;border-radius:4px;
+  background:transparent;color:var(--text-faint);font-size:18px;line-height:1;
+}
+.graph-legend-remove:hover{background:var(--surface-hover);color:var(--text);}
+.graph-canvas-wrap{
+  position:relative;width:100%;height:min(68vh, 760px);min-height:400px;overflow:auto;
+  background:var(--bg);border:1px solid var(--border-soft);border-radius:var(--radius);
+}
+#graphCanvas{display:block;width:100%;min-width:0;background:var(--bg);}
+.graph-empty{position:absolute;inset:0;display:grid;place-items:center;padding:24px;color:var(--text-faint);text-align:center;pointer-events:none;}
+.graph-tooltip{
+  position:absolute;z-index:2;max-width:min(420px, calc(100% - 16px));padding:9px 11px;
+  border:1px solid var(--border);border-radius:var(--radius);background:#101316;
+  color:var(--text);font:11px/1.55 "IBM Plex Mono",ui-monospace,monospace;
+  white-space:pre-wrap;overflow-wrap:anywhere;box-shadow:0 8px 24px rgba(0,0,0,.35);pointer-events:none;
+}
+
 @media(max-width:900px){
   .shell{height:auto;min-height:100vh;min-height:100dvh;}
   .sidebar{width:190px;flex-basis:190px;}
@@ -372,6 +419,8 @@ footer.footnote{display:flex;justify-content:space-between;gap:12px;margin-top:2
   .section-head{align-items:flex-start;gap:12px;flex-wrap:wrap;}
   .signal-filter-bar input[type="search"]{width:100%;}
   .signal-chart-canvas{height:300px;}
+  .graph-canvas-wrap{height:64vh;min-height:360px;}
+  .graph-signal-results{max-height:190px;}
 }
 @media(max-width:640px){
   .shell{display:block;}
@@ -399,6 +448,12 @@ footer.footnote{display:flex;justify-content:space-between;gap:12px;margin-top:2
   .signal-chart-heading{gap:7px;}
   .signal-chart-time{flex-basis:100%;margin-left:0;}
   .signal-chart-canvas{height:280px;}
+  .graph-controls{width:100%;}
+  .graph-controls .btn{flex:1;justify-content:center;}
+  .graph-canvas-wrap{height:58vh;min-height:320px;}
+  .graph-legend-item{gap:5px;padding:5px 6px;}
+  .graph-legend-name{max-width:130px;}
+  .graph-legend-current{font-size:10px;}
   .bc-table-wrap{max-width:calc(100vw - 24px);overflow:auto;}
   footer.footnote{flex-direction:column;}
 }

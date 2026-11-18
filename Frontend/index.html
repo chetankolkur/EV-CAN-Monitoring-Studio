@@ -31,6 +31,10 @@
                     <svg class="nav-icon" viewBox="0 0 20 20" aria-hidden="true"><path d="M1 10h3l2.2-6 4.1 12 2.4-7H19"/></svg>
                     <span>Live Data</span>
                 </button>
+                <button class="nav-item" type="button" data-screen="graph">
+                    <svg class="nav-icon" viewBox="0 0 20 20" aria-hidden="true"><path d="M2 16.5h16M3.5 14l4-4 3 2 5-7 2 2"/></svg>
+                    <span>Graph View</span>
+                </button>
                 <div class="nav-group">
                     <button class="nav-item" id="vm-toggle" type="button" aria-expanded="true">Vehicle Management <span class="nav-caret open" id="vm-caret" aria-hidden="true">›</span></button>
                     <div class="nav-sub open" id="vm-sub">
@@ -159,6 +163,34 @@
                                 <thead><tr><th>Time</th><th>CAN ID</th><th>Fmt</th><th>DLC</th><th>Data (hex)</th><th>Message</th></tr></thead>
                                 <tbody id="rawTable"><tr><td colspan="6" class="bc-empty">No frames yet. Connect an adapter to see live data.</td></tr></tbody>
                             </table>
+                        </div>
+                    </div>
+                </section>
+
+                <section class="screen" id="screen-graph">
+                    <div class="section">
+                        <div class="section-head">
+                            <div>
+                                <div class="section-title"><span class="bar"></span>Live Graph View</div>
+                                <div class="section-note">Select decoded CAN signals to compare their live values over time.</div>
+                            </div>
+                            <div class="graph-controls">
+                                <button id="graphPauseBtn" class="btn" type="button" disabled>Pause</button>
+                                <button id="graphClearBtn" class="btn ghost" type="button" disabled>Clear History</button>
+                            </div>
+                        </div>
+                        <div class="graph-picker">
+                            <label for="graphSignalSearch">Search decoded signals</label>
+                            <input type="search" id="graphSignalSearch" placeholder="Search signals by name…">
+                            <div id="graphSignalResults" class="graph-signal-results" role="group" aria-label="Decoded signal search results">
+                                <div class="bc-empty">Load a DBC and receive decoded CAN frames to select signals.</div>
+                            </div>
+                        </div>
+                        <div id="graphLegend" class="graph-legend" aria-label="Selected signal legend"></div>
+                        <div id="graphCanvasWrap" class="graph-canvas-wrap">
+                            <canvas id="graphCanvas" aria-label="Live graph of selected decoded CAN signals"></canvas>
+                            <div id="graphTooltip" class="graph-tooltip" role="status" hidden></div>
+                            <div id="graphEmpty" class="graph-empty">Search for decoded signals and select them to start plotting.</div>
                         </div>
                     </div>
                 </section>
