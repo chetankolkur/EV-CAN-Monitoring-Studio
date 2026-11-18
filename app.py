@@ -17,6 +17,7 @@ DBC_API_URLS = {
     "TCU": "https://ke76ricmk3.execute-api.ap-south-1.amazonaws.com/prod/documents?path=version1&file=tcu.dbc",
     "MiddleWare": "https://ke76ricmk3.execute-api.ap-south-1.amazonaws.com/prod/documents?path=version1&file=MiddleWare.dbc",
 }
+VERSION2_DBC_API_URL = "https://ke76ricmk3.execute-api.ap-south-1.amazonaws.com/prod/documents?path=version2"
 DBC_FILENAMES = {
     "BMS": "bms.dbc",
     "MCU": "mcu.dbc",
@@ -74,6 +75,43 @@ def load_dbc():
     return load_dbc_file("BMS")
 
 
+def load_version2_bms_dbc():
+    """Fetch and validate the Version-2 BMS DBC through its temporary URL."""
+    response = requests.get(VERSION2_DBC_API_URL, timeout=20)
+    response.raise_for_status()
+    payload = response.json()
+    files = payload.get("files", []) if isinstance(payload, dict) else []
+    entry = next(
+        (
+            item for item in files
+            if isinstance(item, dict)
+            and isinstance(item.get("name"), str)
+            and item["name"].lower() == "bms.dbc"
+            and isinstance(item.get("url"), str)
+            and item["url"]
+        ),
+        None,
+    ) if isinstance(files, list) else None
+    if not entry:
+        raise ValueError("The Version-2 API response does not contain bms.dbc")
+
+    dbc_response = requests.get(entry["url"], timeout=30)
+    dbc_response.raise_for_status()
+    try:
+        text = dbc_response.content.decode("utf-8-sig")
+    except UnicodeDecodeError as error:
+        raise ValueError("Version-2 bms.dbc is not valid UTF-8 text") from error
+    has_message = re.search(
+        r"(?m)^\s*BO_\s+\d+\s+\w+\s*:\s*\d+\s+\w+", text
+    )
+    has_signal = re.search(
+        r"(?m)^\s*SG_\s+\w+\s*(?:M|m\d+M?)?\s*:\s*\d+\|\d+@[01][+-]", text
+    )
+    if not text.strip() or not has_message or not has_signal:
+        raise ValueError("The Version-2 bms.dbc download is not a valid DBC file")
+    return text
+
+
 @app.get("/")
 def home():
     """Dashboard that reads the CAN adapter in Chrome via WebUSB/Web Serial."""
@@ -89,6 +127,24 @@ def browser_can():
 def get_dbc_file():
     """Serve the BMS DBC text; the browser cannot call the AWS API directly (CORS)."""
     return get_dbc_file_for_ecu("BMS")
+
+
+@app.get("/api/dbc-file/version2")
+def get_version2_bms_dbc_file():
+    """Serve the Version-2 BMS DBC without exposing the signed download URL."""
+    try:
+        text = load_version2_bms_dbc()
+    except ValueError as error:
+        raise HTTPException(
+            status_code=503,
+            detail=f"Could not load Version-2 BMS DBC: {error}"
+        )
+    except requests.RequestException as error:
+        raise HTTPException(
+            status_code=503,
+            detail=f"Could not load Version-2 BMS DBC: {type(error).__name__}"
+        )
+    return PlainTextResponse(text, headers={"Cache-Control": "no-store"})
 
 
 @app.get("/api/dbc-file/{ecu}")

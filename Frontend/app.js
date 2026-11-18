@@ -17,6 +17,7 @@ const state = {
     dbc: null,
     dbcs: new Map(),
     dbcStatuses: new Map(),
+    dbcVersionNotice: "",
     activeEcu: "BMS",
     dbcLoading: false,
     transport: null,
@@ -142,6 +143,11 @@ function renderEcuTabs() {
 }
 
 function renderDbcInfo() {
+    if (state.dbcVersionNotice) {
+        $("dbcInfo").textContent = state.dbcVersionNotice;
+        return;
+    }
+
     const lines = DBC_ECUS.filter((ecu) => state.dbcStatuses.has(ecu)).map((ecu) => {
         const status = state.dbcStatuses.get(ecu);
         if (status.loading) {
@@ -155,7 +161,8 @@ function renderDbcInfo() {
         }
         return `${ecu}: Loaded ${status.messages} messages, ${status.signals} signals`;
     });
-    $("dbcInfo").textContent = lines.length ? lines.join("\n") : "No DBC loaded.";
+    const summary = lines.length ? lines.join("\n") : "No DBC loaded.";
+    $("dbcInfo").textContent = summary;
 }
 
 function parseDbcText(text) {
@@ -174,7 +181,15 @@ function parseDbcText(text) {
 }
 
 async function fetchDbcFromServer(ecu) {
-    const response = await fetch(`${DBC_PROXY_URL}/${encodeURIComponent(ecu)}`);
+    return fetchDbcText(`${DBC_PROXY_URL}/${encodeURIComponent(ecu)}`);
+}
+
+async function fetchVersion2BmsDbc() {
+    return fetchDbcText(`${DBC_PROXY_URL}/version2`);
+}
+
+async function fetchDbcText(url) {
+    const response = await fetch(url);
     if (!response.ok) {
         const detail = response.headers.get("content-type")?.includes("application/json")
             ? (await response.json()).detail
@@ -186,14 +201,11 @@ async function fetchDbcFromServer(ecu) {
 
 function setDbcLoading(loading) {
     state.dbcLoading = loading;
-    $("dbcMenuToggle").disabled = loading;
     $("loadAllDbcBtn").disabled = loading;
-    for (const button of $("dbcMenu").querySelectorAll("[data-load-dbc]")) {
-        button.disabled = loading;
-    }
+    $("version2DbcBtn").disabled = loading;
 }
 
-async function loadDbc(ecu) {
+async function loadDbc(ecu, fetchText = () => fetchDbcFromServer(ecu)) {
     const currentDbc = state.dbcs.get(ecu);
     const previous = currentDbc
         ? { messages: currentDbc.messageCount, signals: currentDbc.signalCount }
@@ -201,7 +213,7 @@ async function loadDbc(ecu) {
     state.dbcStatuses.set(ecu, { loading: true, previous });
     renderDbcInfo();
     try {
-        const dbc = parseDbcText(await fetchDbcFromServer(ecu));
+        const dbc = parseDbcText(await fetchText());
         useDbc(ecu, dbc);
         state.dbcStatuses.set(ecu, {
             messages: dbc.messageCount,
@@ -217,40 +229,28 @@ async function loadDbc(ecu) {
     }
 }
 
-$("dbcMenuToggle").addEventListener("click", () => {
-    const menu = $("dbcMenu");
-    const open = menu.hidden;
-    menu.hidden = !open;
-    $("dbcMenuToggle").setAttribute("aria-expanded", String(open));
-});
-$("dbcMenu").addEventListener("click", async (event) => {
-    const button = event.target.closest("[data-load-dbc]");
-    if (!button || state.dbcLoading) return;
-    $("dbcMenu").hidden = true;
-    $("dbcMenuToggle").setAttribute("aria-expanded", "false");
-    setDbcLoading(true);
-    await loadDbc(button.dataset.loadDbc);
-    setDbcLoading(false);
-});
 $("loadAllDbcBtn").addEventListener("click", async () => {
-    if (state.dbcLoading) return;
-    $("dbcMenu").hidden = true;
-    $("dbcMenuToggle").setAttribute("aria-expanded", "false");
+    state.dbcVersionNotice = "";
+    if (state.dbcLoading) {
+        renderDbcInfo();
+        return;
+    }
     setDbcLoading(true);
     await Promise.all(DBC_ECUS.map((ecu) => loadDbc(ecu)));
     setDbcLoading(false);
 });
-document.addEventListener("click", (event) => {
-    if (!event.target.closest(".dbc-loader")) {
-        $("dbcMenu").hidden = true;
-        $("dbcMenuToggle").setAttribute("aria-expanded", "false");
-    }
+$("version2DbcBtn").addEventListener("click", async () => {
+    if (state.dbcLoading) return;
+    state.dbcVersionNotice = "";
+    state.dbcStatuses.clear();
+    setDbcLoading(true);
+    await loadDbc("BMS", fetchVersion2BmsDbc);
+    setDbcLoading(false);
 });
-document.addEventListener("keydown", (event) => {
-    if (event.key === "Escape") {
-        $("dbcMenu").hidden = true;
-        $("dbcMenuToggle").setAttribute("aria-expanded", "false");
-    }
+$("version3DbcBtn").addEventListener("click", () => {
+    state.dbcVersionNotice = "Version-3 DBC files are not available.";
+    state.dbcStatuses.clear();
+    renderDbcInfo();
 });
 $("ecuTabs").addEventListener("click", (event) => {
     const tab = event.target.closest("[data-ecu-tab]");
