@@ -8,6 +8,11 @@ const DBC_PROXY_URL = "/api/dbc-file";
 const RAW_ROWS = 200;
 const STALE_MS = 3000;
 const MAX_SIGNAL_HISTORY = 120;
+const GRAPH_RANGES = {
+    fiveMinutes: 5 * 60 * 1000,
+    thirtyMinutes: 30 * 60 * 1000,
+    oneHour: 60 * 60 * 1000
+};
 const SIGNAL_CHART_HEIGHT = 340;
 const GRAPH_AXIS_WIDTH = 58;
 
@@ -31,9 +36,11 @@ const state = {
     graphSignals: new Set(),
     graphColors: new Map(),
     nextGraphColor: 0,
+    graphRangeMs: GRAPH_RANGES.fiveMinutes,
     graphPaused: false,
     graphClearAfter: 0,
     graphPickerSignature: "",
+    graphPickerDismissed: false,
     graphLegendSignature: "",
     graphDomain: null,
     graphHoverPosition: null,
@@ -384,9 +391,7 @@ function handleFrame(frame) {
                         }
                         if (typeof sig.value === "number" && Number.isFinite(sig.value)) {
                             history.push({ time: now, value: sig.value });
-                            if (history.length > MAX_SIGNAL_HISTORY) {
-                                history.splice(0, history.length - MAX_SIGNAL_HISTORY);
-                            }
+                            pruneHistoryBefore(history, now - GRAPH_RANGES.oneHour);
                         }
                     }
                 }
@@ -714,8 +719,26 @@ function signalLabel(sig) {
     return sig.ecu ? `${sig.ecu} · ${sig.name}` : sig.name;
 }
 
-function graphHistoryFor(key) {
-    return (state.signalHistory.get(key) || []).filter((point) => point.time >= state.graphClearAfter);
+function graphHistoryFor(key, now = Date.now()) {
+    const firstVisibleTime = Math.max(state.graphClearAfter, now - state.graphRangeMs);
+    return (state.signalHistory.get(key) || []).filter((point) =>
+        point.time >= firstVisibleTime && point.time <= now
+    );
+}
+
+function pruneHistoryBefore(history, cutoff) {
+    let firstRecent = 0;
+    while (firstRecent < history.length && history[firstRecent].time < cutoff) {
+        firstRecent++;
+    }
+    if (firstRecent) history.splice(0, firstRecent);
+}
+
+function pruneSignalHistory(now = Date.now()) {
+    const cutoff = now - GRAPH_RANGES.oneHour;
+    for (const history of state.signalHistory.values()) {
+        pruneHistoryBefore(history, cutoff);
+    }
 }
 
 function graphColorFor(key) {
@@ -724,6 +747,13 @@ function graphColorFor(key) {
         state.graphColors.set(key, `hsl(${(index * 137.508) % 360} 72% 62%)`);
     }
     return state.graphColors.get(key);
+}
+
+function dismissGraphSignalPicker() {
+    state.graphPickerDismissed = true;
+    const results = $("graphSignalResults");
+    results.hidden = true;
+    results.replaceChildren();
 }
 
 function renderGraphSignalPicker(force = false) {
@@ -736,7 +766,7 @@ function renderGraphSignalPicker(force = false) {
     }
     state.graphPickerSignature = signature;
 
-    if (!search) {
+    if (!search || state.graphPickerDismissed) {
         results.hidden = true;
         results.replaceChildren();
         return;
@@ -834,6 +864,7 @@ function renderGraphLegend() {
 }
 
 function renderGraphView(force = false) {
+    renderGraphRangeControls();
     $("graphPauseBtn").disabled = state.graphSignals.size === 0;
     $("graphPauseBtn").textContent = state.graphPaused ? "Resume" : "Pause";
     $("graphPauseBtn").setAttribute("aria-pressed", String(state.graphPaused));
@@ -856,12 +887,21 @@ function renderGraphView(force = false) {
     else drawGraphCanvas();
 }
 
+function renderGraphRangeControls() {
+    for (const button of $("graphRangeControls").querySelectorAll("[data-graph-range]")) {
+        const selected = Number(button.dataset.graphRange) === state.graphRangeMs;
+        button.classList.toggle("active", selected);
+        button.setAttribute("aria-pressed", String(selected));
+    }
+}
+
 function drawGraphCanvas(hoverTime = null) {
     const canvas = $("graphCanvas");
+    const now = Date.now();
     const signals = [...state.graphSignals].map((key) => ({
         key,
         sig: state.signals.get(key),
-        history: graphHistoryFor(key).filter((point) =>
+        history: graphHistoryFor(key, now).filter((point) =>
             Number.isFinite(point.time) && Number.isFinite(point.value)
         )
     })).filter((item) => item.sig);
@@ -872,7 +912,7 @@ function drawGraphCanvas(hoverTime = null) {
         empty.hidden = false;
         empty.textContent = state.graphClearAfter
             ? "Waiting for new CAN samples after clearing graph history."
-            : "Waiting for numeric decoded CAN samples for the selected signals.";
+            : "No recorded data for the selected signals in this time range.";
         state.graphDomain = null;
         return;
     }
@@ -891,8 +931,8 @@ function drawGraphCanvas(hoverTime = null) {
     context.setTransform(dpr, 0, 0, dpr, 0, 0);
     context.clearRect(0, 0, width, height);
 
-    const firstTime = Math.min(...availableHistories.map((history) => history[0].time));
-    const lastTime = Math.max(...availableHistories.map((history) => history[history.length - 1].time));
+    const firstTime = now - state.graphRangeMs;
+    const lastTime = now;
     const timeSpan = lastTime - firstTime;
     const plotLeft = 88;
     const plotRight = width - 24 - Math.max(0, signals.length - 1) * GRAPH_AXIS_WIDTH;
@@ -913,8 +953,12 @@ function drawGraphCanvas(hoverTime = null) {
         let min = null;
         let max = null;
         if (history.length) {
-            min = Math.min(...history.map((point) => point.value));
-            max = Math.max(...history.map((point) => point.value));
+            min = Infinity;
+            max = -Infinity;
+            for (const point of history) {
+                if (point.value < min) min = point.value;
+                if (point.value > max) max = point.value;
+            }
             const padding = min === max ? Math.abs(min) * 0.05 || 1 : (max - min) * 0.08;
             min -= padding;
             max += padding;
@@ -1100,7 +1144,7 @@ function updateGraphTooltip(event) {
 
 function drawSignalChart(key, canvas) {
     const sig = state.signals.get(key);
-    const history = state.signalHistory.get(key) || [];
+    const history = (state.signalHistory.get(key) || []).slice(-MAX_SIGNAL_HISTORY);
     if (!sig || !history.length || canvas.closest(".signal-chart-row").hidden) return;
 
     const width = canvas.clientWidth;
@@ -1415,6 +1459,8 @@ setInterval(() => {
     renderEcuTests();
 }, 250);
 
+setInterval(pruneSignalHistory, 60_000);
+
 setInterval(() => {
     state.framesThisSecond = 0;
     if (state.transport && state.lastFrameAt && Date.now() - state.lastFrameAt > STALE_MS) {
@@ -1432,7 +1478,42 @@ setInterval(() => {
 
 $("signalSearch").addEventListener("input", renderSignals);
 window.addEventListener("resize", renderSignals);
-$("graphSignalSearch").addEventListener("input", () => renderGraphSignalPicker(true));
+let lastGraphSearch = "";
+const handleGraphSearchChange = (event) => {
+    const search = event.currentTarget.value.trim().toLowerCase();
+    if (!search) {
+        dismissGraphSignalPicker();
+    } else {
+        if (event.type === "input" && search !== lastGraphSearch) {
+            state.graphPickerDismissed = false;
+        }
+        renderGraphSignalPicker(true);
+    }
+    lastGraphSearch = search;
+};
+$("graphSignalSearch").addEventListener("input", handleGraphSearchChange);
+$("graphSignalSearch").addEventListener("search", handleGraphSearchChange);
+$("graphSignalSearch").addEventListener("focus", () => {
+    if (!$("graphSignalSearch").value.trim()) return;
+    state.graphPickerDismissed = false;
+    renderGraphSignalPicker(true);
+});
+document.addEventListener("pointerdown", (event) => {
+    const graphPicker = document.querySelector(".graph-picker");
+    if (!graphPicker.contains(event.target)) {
+        dismissGraphSignalPicker();
+    }
+});
+$("graphRangeControls").addEventListener("click", (event) => {
+    const button = event.target.closest("[data-graph-range]");
+    if (!button) return;
+    const range = Number(button.dataset.graphRange);
+    if (!Number.isFinite(range) || range <= 0) return;
+    state.graphRangeMs = range;
+    state.graphHoverPosition = null;
+    $("graphTooltip").hidden = true;
+    renderGraphView(true);
+});
 $("graphPauseBtn").addEventListener("click", () => {
     state.graphPaused = !state.graphPaused;
     state.graphHoverPosition = null;

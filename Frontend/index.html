@@ -193,6 +193,11 @@
                                 <div class="section-note">Select decoded CAN signals to compare their live values over time.</div>
                             </div>
                             <div class="graph-controls">
+                                <div id="graphRangeControls" class="graph-range-controls" role="group" aria-label="Graph time range">
+                                    <button class="graph-range-btn active" type="button" data-graph-range="300000" aria-pressed="true">5 Minutes</button>
+                                    <button class="graph-range-btn" type="button" data-graph-range="1800000" aria-pressed="false">30 Minutes</button>
+                                    <button class="graph-range-btn" type="button" data-graph-range="3600000" aria-pressed="false">1 Hour</button>
+                                </div>
                                 <button id="graphPauseBtn" class="btn" type="button" disabled>Pause</button>
                                 <button id="graphClearBtn" class="btn ghost" type="button" disabled>Clear History</button>
                             </div>
