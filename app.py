@@ -1,60 +1,42 @@
 import re
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import requests
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse, PlainTextResponse, RedirectResponse
+from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 app = FastAPI(title="EV CAN Browser Monitor")
 
 BASE_DIR = Path(__file__).resolve().parent
 FRONTEND_DIR = BASE_DIR / "Frontend"
-
-DBC_API_URLS = {
-    "BMS": "https://ke76ricmk3.execute-api.ap-south-1.amazonaws.com/prod/documents?path=version1&file=bms.dbc",
-    "MCU": "https://ke76ricmk3.execute-api.ap-south-1.amazonaws.com/prod/documents?path=version1&file=mcu.dbc",
-    "TCU": "https://ke76ricmk3.execute-api.ap-south-1.amazonaws.com/prod/documents?path=version1&file=tcu.dbc",
-    "MiddleWare": "https://ke76ricmk3.execute-api.ap-south-1.amazonaws.com/prod/documents?path=version1&file=MiddleWare.dbc",
-}
-VERSION2_DBC_API_URL = "https://ke76ricmk3.execute-api.ap-south-1.amazonaws.com/prod/documents?path=version2"
-DBC_FILENAMES = {
-    "BMS": "bms.dbc",
-    "MCU": "mcu.dbc",
-    "TCU": "tcu.dbc",
-    "MiddleWare": "MiddleWare.dbc",
+DOCUMENTS_API_URL = "https://ke76ricmk3.execute-api.ap-south-1.amazonaws.com/prod/documents"
+DBC_ECU_BY_FILENAME = {
+    "bms.dbc": "BMS",
+    "mcu.dbc": "MCU",
+    "tcu.dbc": "TCU",
+    "middleware.dbc": "MiddleWare",
 }
 
 app.mount("/static", StaticFiles(directory=str(FRONTEND_DIR)), name="static")
 
-dbc_text = None
-
-
-def load_dbc_file(ecu):
-    """Fetch a fresh DBC download URL and retrieve its validated contents."""
-    global dbc_text
-    api_url = DBC_API_URLS[ecu]
-    response = requests.get(api_url, timeout=20)
+def documents_api_payload(path=None):
+    params = {"path": path} if path is not None else None
+    response = requests.get(DOCUMENTS_API_URL, params=params, timeout=20)
     response.raise_for_status()
-    payload = response.json()
-    files = payload.get("files", []) if isinstance(payload, dict) else []
-    filename = DBC_FILENAMES[ecu]
-    entry = next(
-        (
-            item for item in files
-            if isinstance(item, dict)
-            and item.get("name") == filename
-            and item.get("url")
-        ),
-        None,
-    ) if isinstance(files, list) else None
-    if not entry:
-        raise ValueError(f"The API response does not contain {filename}")
-
-    dbc_response = requests.get(entry["url"], timeout=30)
-    dbc_response.raise_for_status()
     try:
-        text = dbc_response.content.decode("utf-8-sig")
+        payload = response.json()
+    except ValueError as error:
+        raise ValueError("The documents API returned invalid JSON") from error
+    if not isinstance(payload, dict):
+        raise ValueError("The documents API response must be a JSON object")
+    return payload
+
+
+def validated_dbc_text(filename, content):
+    try:
+        text = content.decode("utf-8-sig")
     except UnicodeDecodeError as error:
         raise ValueError(f"{filename} is not valid UTF-8 text") from error
     has_message = re.search(
@@ -64,52 +46,81 @@ def load_dbc_file(ecu):
         r"(?m)^\s*SG_\s+\w+\s*(?:M|m\d+M?)?\s*:\s*\d+\|\d+@[01][+-]", text
     )
     if not text.strip() or not has_message or not has_signal:
-        raise ValueError(f"The download is not a valid {filename} DBC file")
-    if ecu == "BMS":
-        dbc_text = text
+        raise ValueError(f"The download is not a valid {filename}")
     return text
 
 
-def load_dbc():
-    """Keep the original BMS loader available for existing callers."""
-    return load_dbc_file("BMS")
+def available_dbc_versions():
+    payload = documents_api_payload()
+    folders = payload.get("folders")
+    if not isinstance(folders, list):
+        raise ValueError("The documents API response does not contain a folders list")
+
+    versions = []
+    seen_paths = set()
+    for folder in folders:
+        if not isinstance(folder, dict):
+            continue
+        name = folder.get("name")
+        path = folder.get("path") or name
+        if not isinstance(name, str) or not isinstance(path, str):
+            continue
+        if not re.fullmatch(r"[A-Za-z0-9_-]+", path) or path in seen_paths:
+            continue
+        versions.append({"name": name, "path": path})
+        seen_paths.add(path)
+    return versions
 
 
-def load_version2_bms_dbc():
-    """Fetch and validate the Version-2 BMS DBC through its temporary URL."""
-    response = requests.get(VERSION2_DBC_API_URL, timeout=20)
-    response.raise_for_status()
-    payload = response.json()
-    files = payload.get("files", []) if isinstance(payload, dict) else []
-    entry = next(
-        (
-            item for item in files
-            if isinstance(item, dict)
-            and isinstance(item.get("name"), str)
-            and item["name"].lower() == "bms.dbc"
-            and isinstance(item.get("url"), str)
-            and item["url"]
-        ),
-        None,
-    ) if isinstance(files, list) else None
-    if not entry:
-        raise ValueError("The Version-2 API response does not contain bms.dbc")
+def load_dbc_version(path):
+    if not isinstance(path, str) or not re.fullmatch(r"[A-Za-z0-9_-]+", path):
+        raise ValueError("Invalid DBC version path")
 
-    dbc_response = requests.get(entry["url"], timeout=30)
-    dbc_response.raise_for_status()
-    try:
-        text = dbc_response.content.decode("utf-8-sig")
-    except UnicodeDecodeError as error:
-        raise ValueError("Version-2 bms.dbc is not valid UTF-8 text") from error
-    has_message = re.search(
-        r"(?m)^\s*BO_\s+\d+\s+\w+\s*:\s*\d+\s+\w+", text
-    )
-    has_signal = re.search(
-        r"(?m)^\s*SG_\s+\w+\s*(?:M|m\d+M?)?\s*:\s*\d+\|\d+@[01][+-]", text
-    )
-    if not text.strip() or not has_message or not has_signal:
-        raise ValueError("The Version-2 bms.dbc download is not a valid DBC file")
-    return text
+    payload = documents_api_payload(path)
+    files = payload.get("files")
+    if not isinstance(files, list):
+        raise ValueError("The version API response does not contain a files list")
+
+    downloaded = []
+    errors = []
+    seen_ecus = set()
+    for entry in files:
+        if not isinstance(entry, dict):
+            continue
+        filename = entry.get("name")
+        if not isinstance(filename, str) or not filename.lower().endswith(".dbc"):
+            continue
+
+        ecu = DBC_ECU_BY_FILENAME.get(filename.lower())
+        url = entry.get("url")
+        if not isinstance(url, str) or not url:
+            errors.append({"ecu": ecu, "name": filename, "error": "No download URL provided"})
+            continue
+        try:
+            parsed_url = urlsplit(url)
+        except ValueError:
+            errors.append({"ecu": ecu, "name": filename, "error": "Invalid download URL"})
+            continue
+        if parsed_url.scheme != "https" or not parsed_url.netloc:
+            errors.append({"ecu": ecu, "name": filename, "error": "Invalid download URL"})
+            continue
+        if ecu and ecu in seen_ecus:
+            errors.append({"ecu": ecu, "name": filename, "error": "Multiple DBC files map to this ECU"})
+            continue
+        if ecu:
+            seen_ecus.add(ecu)
+
+        try:
+            response = requests.get(url, timeout=30)
+            response.raise_for_status()
+            text = validated_dbc_text(filename, response.content)
+        except (requests.RequestException, ValueError) as error:
+            errors.append({"ecu": ecu, "name": filename, "error": str(error)})
+            continue
+
+        downloaded.append({"ecu": ecu, "name": filename, "text": text})
+
+    return {"version": path, "files": downloaded, "errors": errors}
 
 
 @app.get("/")
@@ -123,45 +134,33 @@ def browser_can():
     return RedirectResponse("/")
 
 
-@app.get("/api/dbc-file")
-def get_dbc_file():
-    """Serve the BMS DBC text; the browser cannot call the AWS API directly (CORS)."""
-    return get_dbc_file_for_ecu("BMS")
-
-
-@app.get("/api/dbc-file/version2")
-def get_version2_bms_dbc_file():
-    """Serve the Version-2 BMS DBC without exposing the signed download URL."""
+@app.get("/api/dbc-versions")
+def get_dbc_versions():
     try:
-        text = load_version2_bms_dbc()
-    except ValueError as error:
-        raise HTTPException(
-            status_code=503,
-            detail=f"Could not load Version-2 BMS DBC: {error}"
-        )
+        return {"versions": available_dbc_versions()}
     except requests.RequestException as error:
         raise HTTPException(
-            status_code=503,
-            detail=f"Could not load Version-2 BMS DBC: {type(error).__name__}"
-        )
-    return PlainTextResponse(text, headers={"Cache-Control": "no-store"})
-
-
-@app.get("/api/dbc-file/{ecu}")
-def get_dbc_file_for_ecu(ecu: str):
-    """Serve one of the configured ECU DBC files without exposing AWS CORS details."""
-    if ecu not in DBC_API_URLS:
-        raise HTTPException(status_code=404, detail="Unknown ECU DBC")
-    try:
-        text = load_dbc_file(ecu)
+            status_code=502,
+            detail=f"Could not fetch DBC versions: {type(error).__name__}"
+        ) from error
     except ValueError as error:
         raise HTTPException(
-            status_code=503,
-            detail=f"Could not load {ecu} DBC: {error}"
-        )
-    except Exception as error:
+            status_code=502,
+            detail=f"Could not read DBC versions: {error}"
+        ) from error
+
+
+@app.get("/api/dbc-files")
+def get_dbc_files(path: str):
+    try:
+        return load_dbc_version(path)
+    except ValueError as error:
         raise HTTPException(
-            status_code=503,
-            detail=f"Could not load {ecu} DBC: {type(error).__name__}"
-        )
-    return PlainTextResponse(text, headers={"Cache-Control": "no-store"})
+            status_code=400 if str(error) == "Invalid DBC version path" else 502,
+            detail=f"Could not load DBC version: {error}"
+        ) from error
+    except requests.RequestException as error:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Could not fetch DBC version: {type(error).__name__}"
+        ) from error

@@ -4,7 +4,8 @@ import { SlcanTransport, PcanUsbTransport, SimulatorTransport } from "./transpor
 
 const DBC_ECUS = ["BMS", "MCU", "TCU", "MiddleWare"];
 const DBC_SOURCE_FOR_TAB = { Cluster: "MCU" };
-const DBC_PROXY_URL = "/api/dbc-file";
+const DBC_VERSIONS_URL = "/api/dbc-versions";
+const DBC_FILES_URL = "/api/dbc-files";
 const RAW_ROWS = 200;
 const STALE_MS = 3000;
 const MAX_SIGNAL_HISTORY = 120;
@@ -22,6 +23,8 @@ const state = {
     dbc: null,
     dbcs: new Map(),
     dbcStatuses: new Map(),
+    dbcVersions: [],
+    dbcSelectedVersion: "",
     dbcVersionNotice: "",
     activeEcu: "BMS",
     dbcLoading: false,
@@ -160,6 +163,9 @@ function renderDbcInfo() {
         if (status.loading) {
             return `${ecu}: Loading…${status.previous ? " (existing DBC remains active)" : ""}`;
         }
+        if (status.notIncluded) {
+            return `${ecu}: Not present in ${state.dbcSelectedVersion}`;
+        }
         if (status.error) {
             const previous = status.previous
                 ? ` Previous DBC remains active (${status.previous.messages} messages, ${status.previous.signals} signals).`
@@ -187,15 +193,7 @@ function parseDbcText(text) {
     return dbc;
 }
 
-async function fetchDbcFromServer(ecu) {
-    return fetchDbcText(`${DBC_PROXY_URL}/${encodeURIComponent(ecu)}`);
-}
-
-async function fetchVersion2BmsDbc() {
-    return fetchDbcText(`${DBC_PROXY_URL}/version2`);
-}
-
-async function fetchDbcText(url) {
+async function fetchApiJson(url) {
     const response = await fetch(url);
     if (!response.ok) {
         const detail = response.headers.get("content-type")?.includes("application/json")
@@ -203,18 +201,18 @@ async function fetchDbcText(url) {
             : await response.text();
         throw new Error(`Server returned ${response.status}${detail ? `: ${detail}` : ""}`);
     }
-    return response.text();
+    return response.json();
 }
 
 function setDbcLoading(loading) {
     state.dbcLoading = loading;
-    $("dbcVersionToggle").disabled = loading;
+    $("dbcVersionToggle").disabled = loading || !state.dbcVersions.length;
     for (const option of $("dbcVersionMenu").querySelectorAll("[data-dbc-version]")) {
         option.disabled = loading;
     }
 }
 
-async function loadDbc(ecu, fetchText = () => fetchDbcFromServer(ecu)) {
+async function loadDbc(ecu, fetchText) {
     const currentDbc = state.dbcs.get(ecu);
     const previous = currentDbc
         ? { messages: currentDbc.messageCount, signals: currentDbc.signalCount }
@@ -238,42 +236,146 @@ async function loadDbc(ecu, fetchText = () => fetchDbcFromServer(ecu)) {
     }
 }
 
+function unloadDbc(ecu) {
+    const affectedEcus = ecu === "MCU" ? ["MCU", "Cluster"] : [ecu];
+    state.dbcs.delete(ecu);
+    for (const key of state.signals.keys()) {
+        if (!affectedEcus.some((affectedEcu) => key.startsWith(`${affectedEcu}.`))) continue;
+        state.signals.delete(key);
+        state.signalHistory.delete(key);
+        state.graphSignals.delete(key);
+    }
+    for (const [key, row] of state.signalRows) {
+        if (!affectedEcus.some((affectedEcu) => key.startsWith(`${affectedEcu}.`))) continue;
+        row.row.remove();
+        row.chartRow.remove();
+        state.signalRows.delete(key);
+    }
+    state.signalRows.clear();
+    rebuildCombinedDbc();
+    if (ecu === "BMS") state.ecuTestResults.clear();
+    state.firstUnmatchedFrame = null;
+    state.graphPickerSignature = "";
+    state.graphLegendSignature = "";
+    state.graphDomain = null;
+    state.graphHoverPosition = null;
+    $("signalGrid").innerHTML = '<div class="bc-empty">Waiting for decoded CAN frames…</div>';
+    renderSignals();
+    renderGraphSignalPicker(true);
+    renderGraphView(true);
+    renderEcuTabs();
+    renderEcuTests();
+}
+
 function setDbcVersionMenuOpen(open) {
     $("dbcVersionMenu").hidden = !open;
     $("dbcVersionToggle").setAttribute("aria-expanded", String(open));
 }
 
+function formatDbcVersionName(name) {
+    const match = name.match(/^version[-_]?(.+)$/i);
+    return match ? `Version-${match[1]}` : name;
+}
+
 function setSelectedDbcVersion(version) {
-    $("dbcVersionLabel").textContent = `Version-${version}`;
+    $("dbcVersionLabel").textContent = formatDbcVersionName(version.name);
     for (const option of $("dbcVersionMenu").querySelectorAll("[data-dbc-version]")) {
-        option.setAttribute("aria-current", String(option.dataset.dbcVersion === version));
+        option.setAttribute("aria-current", String(option.dataset.dbcVersion === version.path));
     }
 }
 
-async function loadVersion1Dbcs() {
-    state.dbcVersionNotice = "";
-    if (state.dbcLoading) {
-        renderDbcInfo();
-        return;
-    }
-    setDbcLoading(true);
-    await Promise.all(DBC_ECUS.map((ecu) => loadDbc(ecu)));
-    setDbcLoading(false);
-}
-
-async function loadVersion2Dbc() {
-    if (state.dbcLoading) return;
-    state.dbcVersionNotice = "";
-    state.dbcStatuses.clear();
-    setDbcLoading(true);
-    await loadDbc("BMS", fetchVersion2BmsDbc);
-    setDbcLoading(false);
-}
-
-function showVersion3Unavailable() {
-    state.dbcVersionNotice = "Version-3 DBC files are not available.";
-    state.dbcStatuses.clear();
+async function loadDbcVersions() {
+    state.dbcVersionNotice = "Loading DBC versions…";
     renderDbcInfo();
+    try {
+        const payload = await fetchApiJson(DBC_VERSIONS_URL);
+        if (!Array.isArray(payload.versions)) {
+            throw new Error("The server response did not contain a versions list.");
+        }
+        state.dbcVersions = payload.versions.filter((version) =>
+            version &&
+            typeof version.name === "string" &&
+            typeof version.path === "string" &&
+            version.path
+        );
+        if (!state.dbcVersions.length) {
+            throw new Error("No DBC version folders are available.");
+        }
+
+        const menu = $("dbcVersionMenu");
+        menu.replaceChildren();
+        for (const version of state.dbcVersions) {
+            const option = document.createElement("button");
+            option.type = "button";
+            option.className = "dbc-version-option";
+            option.setAttribute("role", "menuitem");
+            option.dataset.dbcVersion = version.path;
+            option.textContent = formatDbcVersionName(version.name);
+            menu.appendChild(option);
+        }
+        state.dbcVersionNotice = "";
+        $("dbcVersionToggle").disabled = false;
+    } catch (error) {
+        state.dbcVersionNotice = `Could not load DBC versions: ${error.message}`;
+        $("dbcVersionToggle").disabled = true;
+    }
+    renderDbcInfo();
+}
+
+async function loadDbcVersion(version) {
+    if (state.dbcLoading) return;
+    state.dbcVersionNotice = `Loading ${formatDbcVersionName(version.name)}…`;
+    renderDbcInfo();
+    setDbcLoading(true);
+    try {
+        const payload = await fetchApiJson(
+            `${DBC_FILES_URL}?path=${encodeURIComponent(version.path)}`
+        );
+        if (!Array.isArray(payload.files) || !Array.isArray(payload.errors)) {
+            throw new Error("The server response did not contain file results.");
+        }
+
+        state.dbcVersionNotice = "";
+        state.dbcSelectedVersion = formatDbcVersionName(version.name);
+        state.dbcStatuses.clear();
+
+        const filesByEcu = new Map();
+        for (const file of payload.files) {
+            if (file && DBC_ECUS.includes(file.ecu) && typeof file.text === "string") {
+                filesByEcu.set(file.ecu, file);
+            }
+        }
+        const errorsByEcu = new Map(
+            payload.errors
+                .filter((item) => item && DBC_ECUS.includes(item.ecu))
+                .map((item) => [item.ecu, item])
+        );
+
+        for (const ecu of DBC_ECUS) {
+            if (filesByEcu.has(ecu)) continue;
+            const error = errorsByEcu.get(ecu);
+            if (error) {
+                const current = state.dbcs.get(ecu);
+                const previous = current
+                    ? { messages: current.messageCount, signals: current.signalCount }
+                    : null;
+                state.dbcStatuses.set(ecu, { error: error.error, previous });
+            } else {
+                unloadDbc(ecu);
+                state.dbcStatuses.set(ecu, { notIncluded: true });
+            }
+        }
+
+        await Promise.all([...filesByEcu].map(([ecu, file]) =>
+            loadDbc(ecu, async () => file.text)
+        ));
+        renderDbcInfo();
+    } catch (error) {
+        state.dbcVersionNotice = `Could not load ${formatDbcVersionName(version.name)}: ${error.message}`;
+        renderDbcInfo();
+    } finally {
+        setDbcLoading(false);
+    }
 }
 
 $("dbcVersionToggle").addEventListener("click", () => {
@@ -283,18 +385,18 @@ $("dbcVersionToggle").addEventListener("click", () => {
 $("dbcVersionMenu").addEventListener("click", async (event) => {
     const option = event.target.closest("[data-dbc-version]");
     if (!option || state.dbcLoading) return;
-    const { dbcVersion } = option.dataset;
+    const version = state.dbcVersions.find(({ path }) => path === option.dataset.dbcVersion);
+    if (!version) return;
     setDbcVersionMenuOpen(false);
-    setSelectedDbcVersion(dbcVersion);
-    if (dbcVersion === "1") await loadVersion1Dbcs();
-    else if (dbcVersion === "2") await loadVersion2Dbc();
-    else if (dbcVersion === "3") showVersion3Unavailable();
+    setSelectedDbcVersion(version);
+    await loadDbcVersion(version);
 });
 document.addEventListener("click", (event) => {
     if (!$("dbcVersionDropdown").contains(event.target)) {
         setDbcVersionMenuOpen(false);
     }
 });
+loadDbcVersions();
 $("ecuTabs").addEventListener("click", (event) => {
     const tab = event.target.closest("[data-ecu-tab]");
     if (!tab || tab.disabled) return;
