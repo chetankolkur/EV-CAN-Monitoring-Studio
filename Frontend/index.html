@@ -74,18 +74,18 @@
                                 <div><div class="section-kicker">SETUP · DBC</div><h2>Load signal definitions</h2><p>Load ECU signal definitions from the server.</p></div>
                             </div>
                             <div class="dbc-loader">
-                                <button id="loadAllDbcBtn" class="btn dbc-version-button" type="button">
-                                    <svg aria-hidden="true" viewBox="0 0 24 24"><path d="m12 3 9 5-9 5-9-5 9-5Z"/><path d="m3 12 9 5 9-5M3 16l9 5 9-5"/></svg>
-                                    <span>Version-1</span>
-                                </button>
-                                <button id="version2DbcBtn" class="btn dbc-version-button" type="button">
-                                    <svg aria-hidden="true" viewBox="0 0 24 24"><path d="m12 3 9 5-9 5-9-5 9-5Z"/><path d="m3 12 9 5 9-5M3 16l9 5 9-5"/></svg>
-                                    <span>Version-2</span>
-                                </button>
-                                <button id="version3DbcBtn" class="btn dbc-version-button" type="button">
-                                    <svg aria-hidden="true" viewBox="0 0 24 24"><path d="m12 3 9 5-9 5-9-5 9-5Z"/><path d="m3 12 9 5 9-5M3 16l9 5 9-5"/></svg>
-                                    <span>Version-3</span>
-                                </button>
+                                <div id="dbcVersionDropdown" class="dbc-version-dropdown">
+                                    <button id="dbcVersionToggle" class="btn dbc-version-button" type="button" aria-haspopup="menu" aria-expanded="false" aria-controls="dbcVersionMenu">
+                                        <svg aria-hidden="true" viewBox="0 0 24 24"><path d="m12 3 9 5-9 5-9-5 9-5Z"/><path d="m3 12 9 5 9-5M3 16l9 5 9-5"/></svg>
+                                        <span id="dbcVersionLabel">Select Version</span>
+                                        <svg class="dbc-version-chevron" aria-hidden="true" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></svg>
+                                    </button>
+                                    <div id="dbcVersionMenu" class="dbc-version-menu" role="menu" hidden>
+                                        <button class="dbc-version-option" type="button" role="menuitem" data-dbc-version="1">Version-1</button>
+                                        <button class="dbc-version-option" type="button" role="menuitem" data-dbc-version="2">Version-2</button>
+                                        <button class="dbc-version-option" type="button" role="menuitem" data-dbc-version="3">Version-3</button>
+                                    </div>
+                                </div>
                             </div>
                             <p class="bc-muted" id="dbcInfo">No DBC loaded.</p>
                         </section>

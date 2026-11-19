@@ -208,8 +208,10 @@ async function fetchDbcText(url) {
 
 function setDbcLoading(loading) {
     state.dbcLoading = loading;
-    $("loadAllDbcBtn").disabled = loading;
-    $("version2DbcBtn").disabled = loading;
+    $("dbcVersionToggle").disabled = loading;
+    for (const option of $("dbcVersionMenu").querySelectorAll("[data-dbc-version]")) {
+        option.disabled = loading;
+    }
 }
 
 async function loadDbc(ecu, fetchText = () => fetchDbcFromServer(ecu)) {
@@ -236,7 +238,19 @@ async function loadDbc(ecu, fetchText = () => fetchDbcFromServer(ecu)) {
     }
 }
 
-$("loadAllDbcBtn").addEventListener("click", async () => {
+function setDbcVersionMenuOpen(open) {
+    $("dbcVersionMenu").hidden = !open;
+    $("dbcVersionToggle").setAttribute("aria-expanded", String(open));
+}
+
+function setSelectedDbcVersion(version) {
+    $("dbcVersionLabel").textContent = `Version-${version}`;
+    for (const option of $("dbcVersionMenu").querySelectorAll("[data-dbc-version]")) {
+        option.setAttribute("aria-current", String(option.dataset.dbcVersion === version));
+    }
+}
+
+async function loadVersion1Dbcs() {
     state.dbcVersionNotice = "";
     if (state.dbcLoading) {
         renderDbcInfo();
@@ -245,19 +259,41 @@ $("loadAllDbcBtn").addEventListener("click", async () => {
     setDbcLoading(true);
     await Promise.all(DBC_ECUS.map((ecu) => loadDbc(ecu)));
     setDbcLoading(false);
-});
-$("version2DbcBtn").addEventListener("click", async () => {
+}
+
+async function loadVersion2Dbc() {
     if (state.dbcLoading) return;
     state.dbcVersionNotice = "";
     state.dbcStatuses.clear();
     setDbcLoading(true);
     await loadDbc("BMS", fetchVersion2BmsDbc);
     setDbcLoading(false);
-});
-$("version3DbcBtn").addEventListener("click", () => {
+}
+
+function showVersion3Unavailable() {
     state.dbcVersionNotice = "Version-3 DBC files are not available.";
     state.dbcStatuses.clear();
     renderDbcInfo();
+}
+
+$("dbcVersionToggle").addEventListener("click", () => {
+    if (state.dbcLoading) return;
+    setDbcVersionMenuOpen($("dbcVersionMenu").hidden);
+});
+$("dbcVersionMenu").addEventListener("click", async (event) => {
+    const option = event.target.closest("[data-dbc-version]");
+    if (!option || state.dbcLoading) return;
+    const { dbcVersion } = option.dataset;
+    setDbcVersionMenuOpen(false);
+    setSelectedDbcVersion(dbcVersion);
+    if (dbcVersion === "1") await loadVersion1Dbcs();
+    else if (dbcVersion === "2") await loadVersion2Dbc();
+    else if (dbcVersion === "3") showVersion3Unavailable();
+});
+document.addEventListener("click", (event) => {
+    if (!$("dbcVersionDropdown").contains(event.target)) {
+        setDbcVersionMenuOpen(false);
+    }
 });
 $("ecuTabs").addEventListener("click", (event) => {
     const tab = event.target.closest("[data-ecu-tab]");
@@ -290,73 +326,55 @@ function resolveFrameMessage(frame) {
         return { error: idExists ? "CAN format mismatch" : "Not in DBC" };
     }
 
-    const matchingDlc = sameFormat.filter(({ message }) => message.dlc === frame.dlc);
-    if (matchingDlc.length === 1) return { messages: matchingDlc };
-    if (matchingDlc.length > 1 && canDecodeDbcAliasesTogether(matchingDlc)) {
-        return { messages: matchingDlc };
+    const owners = sameFormat.map((candidate) => dbcMessageOwner(candidate));
+    const uniqueOwners = [...new Set(owners)];
+    if (uniqueOwners.length !== 1 || !DBC_ECUS.includes(uniqueOwners[0])) {
+        return { error: "Ambiguous DBC match" };
     }
+
+    const owner = uniqueOwners[0];
+    const candidates = sameFormat.filter((candidate, index) =>
+        owners[index] === owner && candidate.ecu === owner
+    );
+    if (!candidates.length) return { error: "DBC sender mismatch" };
+
+    const matchingDlc = candidates.filter(({ message }) => message.dlc === frame.dlc);
+    if (matchingDlc.length === 1) return { messages: matchingDlc };
     if (matchingDlc.length > 1) return { error: "Ambiguous DBC match" };
-    // Keep decoding a unique ID/format match even when the reported DLC differs.
-    if (sameFormat.length === 1) return { messages: sameFormat };
+    // Keep decoding a unique ECU-owned ID/format match even when the DLC differs.
+    if (candidates.length === 1) return { messages: candidates };
     return { error: "CAN DLC mismatch" };
+}
+
+function ecuForMessageSender(message) {
+    const sender = typeof message.sender === "string"
+        ? message.sender.toLowerCase().replace(/[^a-z0-9]/g, "")
+        : "";
+    if (!sender || sender === "vectorxxx") return null;
+    const matches = DBC_ECUS.filter((ecu) =>
+        sender.includes(ecu.toLowerCase().replace(/[^a-z0-9]/g, ""))
+    );
+    return matches.length === 1 ? matches[0] : matches.length ? "ambiguous" : null;
+}
+
+function ecuForMessageName(message) {
+    const name = typeof message.name === "string" ? message.name.toLowerCase() : "";
+    if (/^bms(?:_|$)/.test(name)) return "BMS";
+    if (/^(?:mcu|e3)(?:_|$)/.test(name)) return "MCU";
+    if (/^tcu(?:_|$)/.test(name)) return "TCU";
+    if (/^middleware(?:_|$)/.test(name)) return "MiddleWare";
+    return null;
+}
+
+function dbcMessageOwner(candidate) {
+    const senderEcu = ecuForMessageSender(candidate.message);
+    if (senderEcu !== null) return senderEcu;
+    return ecuForMessageName(candidate.message) || candidate.ecu;
 }
 
 function signalKeysForEcu(ecu, message, signal) {
     const key = `${ecu}.${message}.${signal}`;
     return ecu === "MCU" ? [key, `Cluster.${message}.${signal}`] : [key];
-}
-
-function signalBitPositions(signal) {
-    const positions = [];
-    if (signal.littleEndian) {
-        for (let index = 0; index < signal.length; index++) {
-            positions.push(signal.startBit + index);
-        }
-    } else {
-        const msbLinear = (signal.startBit >> 3) * 8 + (7 - (signal.startBit & 7));
-        for (let index = 0; index < signal.length; index++) {
-            const position = msbLinear + index;
-            positions.push((position >> 3) * 8 + (7 - (position & 7)));
-        }
-    }
-    return new Set(positions);
-}
-
-function sameSignalEncoding(left, right) {
-    if (left.startBit !== right.startBit ||
-        left.length !== right.length ||
-        left.littleEndian !== right.littleEndian ||
-        left.signed !== right.signed ||
-        left.factor !== right.factor ||
-        left.offset !== right.offset ||
-        left.valueType !== right.valueType ||
-        left.muxValue !== right.muxValue ||
-        left.isMultiplexor !== right.isMultiplexor) {
-        return false;
-    }
-    const leftBits = signalBitPositions(left);
-    const rightBits = signalBitPositions(right);
-    return leftBits.size === rightBits.size &&
-        [...leftBits].every((position) => rightBits.has(position));
-}
-
-function canDecodeDbcAliasesTogether(candidates) {
-    // Shared IDs are decoded into both ECU namespaces only when overlapping bits agree.
-    for (let leftIndex = 0; leftIndex < candidates.length; leftIndex++) {
-        for (let rightIndex = leftIndex + 1; rightIndex < candidates.length; rightIndex++) {
-            const leftSignals = candidates[leftIndex].message.signals;
-            const rightSignals = candidates[rightIndex].message.signals;
-            for (const left of leftSignals) {
-                const leftBits = signalBitPositions(left);
-                for (const right of rightSignals) {
-                    const rightBits = signalBitPositions(right);
-                    const overlaps = [...leftBits].some((position) => rightBits.has(position));
-                    if (overlaps && !sameSignalEncoding(left, right)) return false;
-                }
-            }
-        }
-    }
-    return true;
 }
 
 function handleFrame(frame) {
@@ -407,7 +425,8 @@ function handleFrame(frame) {
         messageName !== "DBC not loaded" &&
         messageName !== "CAN format mismatch" &&
         messageName !== "CAN DLC mismatch" &&
-        messageName !== "Ambiguous DBC match";
+        messageName !== "Ambiguous DBC match" &&
+        messageName !== "DBC sender mismatch";
 
     if (!matched) {
         state.unmatchedIds.add(canId);
@@ -1279,7 +1298,8 @@ function renderSignals() {
         const reasons = {
             "CAN format mismatch": "this ID exists in a DBC but its standard/extended format differs",
             "CAN DLC mismatch": "this ID and frame format match, but the received DLC does not match the DBC",
-            "Ambiguous DBC match": "multiple loaded DBCs define this ID and frame format with the same DLC"
+            "Ambiguous DBC match": "multiple loaded DBCs define this ID and frame format with the same DLC",
+            "DBC sender mismatch": "the message owner does not match the ECU DBC that defines it"
         };
         const reason = reasons[messageName] || "this ID is not in a loaded DBC";
         const hint = grid.querySelector(".bc-empty");
