@@ -831,6 +831,16 @@ function formatValue(sig) {
     return Number.isInteger(v) ? String(v) : v.toFixed(Math.abs(v) < 10 ? 3 : 2).replace(/\.?0+$/, "");
 }
 
+function signalStateLabel(sig) {
+    return typeof sig.display === "string" && sig.display.trim()
+        ? sig.display.trim()
+        : null;
+}
+
+function normalizeSignalState(label) {
+    return label.toLowerCase().trim().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+}
+
 function formatAxisValue(value) {
     if (Number.isInteger(value)) return String(value);
     return Number(value.toPrecision(4)).toString();
@@ -1495,9 +1505,18 @@ function renderSignals() {
         const { row, chartRow } = signalRow;
         row.querySelector(".signal-table-name").textContent = sig.name;
         const valueCell = row.querySelector(".signal-table-value");
-        valueCell.textContent = liveSignal
-            ? `${formatValue(sig)}${sig.unit ? ` ${sig.unit}` : ""}`
-            : "Waiting for data";
+        const stateLabel = liveSignal ? signalStateLabel(sig) : null;
+        if (stateLabel !== null) {
+            const stateBox = document.createElement("span");
+            stateBox.className = "signal-state-box";
+            stateBox.dataset.state = normalizeSignalState(stateLabel);
+            stateBox.textContent = stateLabel;
+            valueCell.replaceChildren(stateBox);
+        } else {
+            valueCell.textContent = liveSignal
+                ? `${formatValue(sig)}${sig.unit ? ` ${sig.unit}` : ""}`
+                : "Waiting for data";
+        }
         valueCell.classList.toggle("waiting", !liveSignal);
         row.querySelector(".signal-table-range").textContent = formatSignalRange(sig);
         row.classList.toggle("stale", Boolean(liveSignal && now - liveSignal.updatedAt > STALE_MS));

@@ -387,6 +387,37 @@ hr.soft{border:none;border-top:1px solid var(--border-soft);margin:22px 0;}
 .graph-view-btn[aria-expanded="true"]{color:var(--accent);border-color:#6a512e;background:var(--accent-soft);}
 .signal-table-name{font-weight:600;white-space:normal;}
 .signal-table-value{color:var(--good);font-weight:700;font-variant-numeric:tabular-nums;}
+.signal-state-box{
+  display:inline-flex;align-items:center;justify-content:center;min-height:28px;
+  padding:4px 11px;border:1px solid #59636d;border-radius:6px;
+  background:#262d33;color:var(--text);font-size:11.5px;font-weight:700;
+  letter-spacing:.06em;line-height:1.2;text-transform:uppercase;
+  box-shadow:inset 0 0 10px rgba(175,190,205,.06),0 0 8px rgba(175,190,205,.05);
+}
+.signal-state-box[data-state="eco"]{
+  border-color:#45b26b;background:#16261d;color:#73d891;
+  box-shadow:inset 0 0 10px rgba(69,178,107,.14),0 0 8px rgba(69,178,107,.12);
+}
+.signal-state-box[data-state="sport"],.signal-state-box[data-state^="sport-"],
+.signal-state-box[data-state="power"],.signal-state-box[data-state^="power-"],
+.signal-state-box[data-state="boost"],.signal-state-box[data-state^="boost-"]{
+  border-color:#e8a33d;background:#302519;color:#ffc36a;
+  box-shadow:inset 0 0 10px rgba(232,163,61,.16),0 0 8px rgba(232,163,61,.13);
+}
+.signal-state-box[data-state="normal"],.signal-state-box[data-state^="normal-"],
+.signal-state-box[data-state="drive"],.signal-state-box[data-state^="drive-"],
+.signal-state-box[data-state="ready"],.signal-state-box[data-state^="ready-"],
+.signal-state-box[data-state="on"]{
+  border-color:#4b9fe1;background:#182530;color:#83c9ff;
+  box-shadow:inset 0 0 10px rgba(75,159,225,.16),0 0 8px rgba(75,159,225,.13);
+}
+.signal-state-box[data-state="fault"],.signal-state-box[data-state^="fault-"],
+.signal-state-box[data-state$="-fault"],
+.signal-state-box[data-state="error"],.signal-state-box[data-state^="error-"],
+.signal-state-box[data-state$="-error"]{
+  border-color:#e5484d;background:#2a1a1b;color:#ff8589;
+  box-shadow:inset 0 0 10px rgba(229,72,77,.16),0 0 8px rgba(229,72,77,.14);
+}
 .signal-table-range{color:var(--text-faint);font-size:12px;font-variant-numeric:tabular-nums;}
 .signal-chart-row td{padding:0 14px 14px;border-bottom:1px solid var(--border-soft);}
 .signal-chart-container{position:relative;width:100%;padding:14px;background:var(--bg);border:1px solid var(--border-soft);border-radius:var(--radius);}
