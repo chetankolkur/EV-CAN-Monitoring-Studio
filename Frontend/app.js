@@ -1,5 +1,5 @@
 
-import { parseDbc, decodeMessage, encodeRandom } from "./dbc.js";
+import { parseDbc, filterDbcMessages, decodeMessage, encodeRandom } from "./dbc.js";
 import { SlcanTransport, PcanUsbTransport, SimulatorTransport } from "./transports.js";
 
 const DBC_ECUS = ["BMS", "MCU", "TCU", "MiddleWare"];
@@ -22,6 +22,7 @@ const $ = (id) => document.getElementById(id);
 const state = {
     dbc: null,
     dbcs: new Map(),
+    dbcSources: new Map(),
     dbcStatuses: new Map(),
     dbcVersions: [],
     dbcSelectedVersion: "",
@@ -193,6 +194,36 @@ function parseDbcText(text) {
     return dbc;
 }
 
+function filterMcuDbc(dbc) {
+    const otherEcuIds = new Set();
+    for (const ecu of ["BMS", "TCU", "MiddleWare"]) {
+        const otherDbc = state.dbcs.get(ecu);
+        if (!otherDbc) continue;
+        for (const message of otherDbc.messages.values()) {
+            otherEcuIds.add(message.id);
+        }
+    }
+
+    return filterDbcMessages(dbc, (message) => {
+        const name = message.name.toLowerCase();
+        return !otherEcuIds.has(message.id) &&
+            !name.startsWith("bms_") &&
+            name !== "tyre_pressure";
+    });
+}
+
+function refreshMcuDbc() {
+    const source = state.dbcSources.get("MCU");
+    if (!source) return;
+
+    const dbc = filterMcuDbc(source);
+    useDbc("MCU", dbc);
+    const status = state.dbcStatuses.get("MCU");
+    if (status && status.error && status.previous) {
+        status.previous = { messages: dbc.messageCount, signals: dbc.signalCount };
+    }
+}
+
 async function fetchApiJson(url) {
     const response = await fetch(url);
     if (!response.ok) {
@@ -220,7 +251,9 @@ async function loadDbc(ecu, fetchText) {
     state.dbcStatuses.set(ecu, { loading: true, previous });
     renderDbcInfo();
     try {
-        const dbc = parseDbcText(await fetchText());
+        const parsedDbc = parseDbcText(await fetchText());
+        state.dbcSources.set(ecu, parsedDbc);
+        const dbc = ecu === "MCU" ? filterMcuDbc(parsedDbc) : parsedDbc;
         useDbc(ecu, dbc);
         state.dbcStatuses.set(ecu, {
             messages: dbc.messageCount,
@@ -239,6 +272,7 @@ async function loadDbc(ecu, fetchText) {
 function unloadDbc(ecu) {
     const affectedEcus = ecu === "MCU" ? ["MCU", "Cluster"] : [ecu];
     state.dbcs.delete(ecu);
+    state.dbcSources.delete(ecu);
     for (const key of state.signals.keys()) {
         if (!affectedEcus.some((affectedEcu) => key.startsWith(`${affectedEcu}.`))) continue;
         state.signals.delete(key);
@@ -366,9 +400,18 @@ async function loadDbcVersion(version) {
             }
         }
 
-        await Promise.all([...filesByEcu].map(([ecu, file]) =>
-            loadDbc(ecu, async () => file.text)
-        ));
+        await Promise.all(
+            [...filesByEcu]
+                .filter(([ecu]) => ecu !== "MCU")
+                .map(([ecu, file]) => loadDbc(ecu, async () => file.text))
+        );
+        const mcuFile = filesByEcu.get("MCU");
+        if (mcuFile) {
+            const result = await loadDbc("MCU", async () => mcuFile.text);
+            if (result.error) refreshMcuDbc();
+        } else {
+            refreshMcuDbc();
+        }
         renderDbcInfo();
     } catch (error) {
         state.dbcVersionNotice = `Could not load ${formatDbcVersionName(version.name)}: ${error.message}`;
@@ -416,29 +459,17 @@ function hex(n, width) {
 }
 
 function resolveFrameMessage(frame) {
-    const sameFormat = [];
+    const candidates = [];
     for (const ecu of DBC_ECUS) {
         const dbc = state.dbcs.get(ecu);
         if (!dbc) continue;
         const message = dbc.getMessage(frame.id, frame.extended);
-        if (message) sameFormat.push({ ecu, message });
+        if (message) candidates.push({ ecu, message });
     }
-    if (!sameFormat.length) {
+    if (!candidates.length) {
         const idExists = [...state.dbcs.values()].some((dbc) => dbc.findById(frame.id));
         return { error: idExists ? "CAN format mismatch" : "Not in DBC" };
     }
-
-    const owners = sameFormat.map((candidate) => dbcMessageOwner(candidate));
-    const uniqueOwners = [...new Set(owners)];
-    if (uniqueOwners.length !== 1 || !DBC_ECUS.includes(uniqueOwners[0])) {
-        return { error: "Ambiguous DBC match" };
-    }
-
-    const owner = uniqueOwners[0];
-    const candidates = sameFormat.filter((candidate, index) =>
-        owners[index] === owner && candidate.ecu === owner
-    );
-    if (!candidates.length) return { error: "DBC sender mismatch" };
 
     const matchingDlc = candidates.filter(({ message }) => message.dlc === frame.dlc);
     if (matchingDlc.length === 1) return { messages: matchingDlc };
@@ -446,32 +477,6 @@ function resolveFrameMessage(frame) {
     // Keep decoding a unique ECU-owned ID/format match even when the DLC differs.
     if (candidates.length === 1) return { messages: candidates };
     return { error: "CAN DLC mismatch" };
-}
-
-function ecuForMessageSender(message) {
-    const sender = typeof message.sender === "string"
-        ? message.sender.toLowerCase().replace(/[^a-z0-9]/g, "")
-        : "";
-    if (!sender || sender === "vectorxxx") return null;
-    const matches = DBC_ECUS.filter((ecu) =>
-        sender.includes(ecu.toLowerCase().replace(/[^a-z0-9]/g, ""))
-    );
-    return matches.length === 1 ? matches[0] : matches.length ? "ambiguous" : null;
-}
-
-function ecuForMessageName(message) {
-    const name = typeof message.name === "string" ? message.name.toLowerCase() : "";
-    if (/^bms(?:_|$)/.test(name)) return "BMS";
-    if (/^(?:mcu|e3)(?:_|$)/.test(name)) return "MCU";
-    if (/^tcu(?:_|$)/.test(name)) return "TCU";
-    if (/^middleware(?:_|$)/.test(name)) return "MiddleWare";
-    return null;
-}
-
-function dbcMessageOwner(candidate) {
-    const senderEcu = ecuForMessageSender(candidate.message);
-    if (senderEcu !== null) return senderEcu;
-    return ecuForMessageName(candidate.message) || candidate.ecu;
 }
 
 function signalKeysForEcu(ecu, message, signal) {
@@ -527,8 +532,7 @@ function handleFrame(frame) {
         messageName !== "DBC not loaded" &&
         messageName !== "CAN format mismatch" &&
         messageName !== "CAN DLC mismatch" &&
-        messageName !== "Ambiguous DBC match" &&
-        messageName !== "DBC sender mismatch";
+        messageName !== "Ambiguous DBC match";
 
     if (!matched) {
         state.unmatchedIds.add(canId);
@@ -1410,8 +1414,7 @@ function renderSignals() {
         const reasons = {
             "CAN format mismatch": "this ID exists in a DBC but its standard/extended format differs",
             "CAN DLC mismatch": "this ID and frame format match, but the received DLC does not match the DBC",
-            "Ambiguous DBC match": "multiple loaded DBCs define this ID and frame format with the same DLC",
-            "DBC sender mismatch": "the message owner does not match the ECU DBC that defines it"
+            "Ambiguous DBC match": "multiple loaded DBCs define this ID and frame format with the same DLC"
         };
         const reason = reasons[messageName] || "this ID is not in a loaded DBC";
         const hint = grid.querySelector(".bc-empty");

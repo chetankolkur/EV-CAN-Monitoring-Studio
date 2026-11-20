@@ -129,6 +129,17 @@ export function parseDbc(text) {
         }
     }
 
+    return createDbc(messages);
+}
+
+export function filterDbcMessages(dbc, shouldKeep) {
+    const messages = new Map(
+        [...dbc.messages].filter(([, message]) => shouldKeep(message))
+    );
+    return createDbc(messages);
+}
+
+function createDbc(messages) {
     const list = [...messages.values()];
     return {
         messages,
