@@ -5,6 +5,13 @@
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
     <meta name="theme-color" content="#15181b">
     <title>E3 ELECTRIC.AI | Vehicle Diagnostics</title>
+    <script>
+        (function () {
+            var savedTheme = null;
+            try { savedTheme = localStorage.getItem("ev_can_theme"); } catch (e) {}
+            document.documentElement.dataset.theme = savedTheme === "light" ? "light" : "dark";
+        }());
+    </script>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -55,9 +62,16 @@
                     <div class="page-title" id="page-title">Dashboard</div>
                     <div class="page-crumb" id="page-crumb">Live vehicle overview</div>
                 </div>
-                <div class="vehicle-chip">
-                    <div class="vc-field"><span class="vc-label">CAN ADAPTER</span><span class="vc-value" id="statusText">Adapter disconnected.</span></div>
-                    <span id="statusDot" class="bc-dot"></span>
+                <div class="header-actions">
+                    <button id="themeToggle" class="theme-toggle" type="button" aria-label="Switch to light theme" title="Switch to light theme">
+                        <svg class="theme-icon theme-icon-moon" viewBox="0 0 24 24" aria-hidden="true">
+                            <path d="M20.1 15.2A8.5 8.5 0 0 1 8.8 3.9a8.5 8.5 0 1 0 11.3 11.3Z"/>
+                        </svg>
+                    </button>
+                    <div class="vehicle-chip">
+                        <div class="vc-field"><span class="vc-label">CAN ADAPTER</span><span class="vc-value" id="statusText">Disconnected</span></div>
+                        <span id="statusDot" class="bc-dot"></span>
+                    </div>
                 </div>
             </header>
 
@@ -129,6 +143,44 @@
 
                 <section class="screen" id="screen-ecu">
                     <div class="section">
+                        <section class="panel firmware-version-panel" aria-labelledby="firmware-version-title">
+                            <div class="section-head">
+                                <div>
+                                    <div class="section-title"><span class="bar"></span>Firmware Version Verification</div>
+                                    <div class="section-note" id="firmware-version-title">Compare the expected software version with incoming CAN data.</div>
+                                </div>
+                            </div>
+                            <form id="firmware-version-form" novalidate>
+                                <div class="field">
+                                    <label for="firmware-vin">VIN</label>
+                                    <input id="firmware-vin" name="vin" type="text" placeholder="ME9AC1011BJ693015" autocomplete="off" required>
+                                </div>
+                                <div class="field">
+                                    <label for="firmware-variant">Variant</label>
+                                    <select id="firmware-variant" name="variant">
+                                        <option value="C1">C1</option>
+                                        <option value="C1x">C1x</option>
+                                        <option value="C2">C2</option>
+                                    </select>
+                                </div>
+                                <button id="firmware-submit" class="btn primary" type="submit">Submit</button>
+                            </form>
+                            <div class="firmware-components-wrap">
+                                <table class="firmware-component-table" aria-label="Firmware version comparison by ECU component">
+                                    <thead>
+                                        <tr><th>Component</th><th>Expected API Value</th><th>Live DBC Decoded CAN Value</th><th>Status</th></tr>
+                                    </thead>
+                                    <tbody id="firmware-component-rows">
+                                        <tr><td colspan="4" class="bc-empty">Submit a VIN to load expected ECU component versions.</td></tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                            <div class="firmware-overall">
+                                <strong>Overall status</strong>
+                                <span id="firmware-overall-status" class="pill idle" aria-live="polite">Not checked</span>
+                            </div>
+                            <p id="firmware-version-error" class="firmware-version-error" role="status" hidden></p>
+                        </section>
                         <div class="section-head">
                             <div class="section-title"><span class="bar"></span>Available tests</div>
                             <div class="section-note">Click a test to expand · run one at a time</div>

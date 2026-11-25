@@ -1,10 +1,13 @@
+import os
 import re
 from pathlib import Path
 from urllib.parse import urlsplit
+from dotenv import load_dotenv
+load_dotenv()
 
 import requests
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse, RedirectResponse
+from fastapi.responses import FileResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 app = FastAPI(title="EV CAN Browser Monitor")
@@ -12,6 +15,7 @@ app = FastAPI(title="EV CAN Browser Monitor")
 BASE_DIR = Path(__file__).resolve().parent
 FRONTEND_DIR = BASE_DIR / "Frontend"
 DOCUMENTS_API_URL = "https://ke76ricmk3.execute-api.ap-south-1.amazonaws.com/prod/documents"
+SOFTWARE_VERSIONS_API_URL = "https://ke76ricmk3.execute-api.ap-south-1.amazonaws.com/prod/software-versions"
 DBC_ECU_BY_FILENAME = {
     "bms.dbc": "BMS",
     "mcu.dbc": "MCU",
@@ -163,4 +167,44 @@ def get_dbc_files(path: str):
         raise HTTPException(
             status_code=502,
             detail=f"Could not fetch DBC version: {type(error).__name__}"
+        ) from error
+
+
+@app.post("/api/software-versions")
+def get_software_versions(payload: dict):
+    vin = payload.get("vin")
+    variant = payload.get("variant")
+    if not isinstance(vin, str) or not vin.strip():
+        raise HTTPException(status_code=400, detail="A non-empty VIN is required")
+    if not isinstance(variant, str) or variant not in {"C1", "C1x", "C2"}:
+        raise HTTPException(status_code=400, detail="Variant must be C1, C1x, or C2")
+
+    headers = {
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+    }
+    api_key = os.environ.get("SOFTWARE_VERSIONS_API_KEY")
+    if api_key:
+        headers["x-api-key"] = api_key
+    bearer_token = os.getenv("SOFTWARE_VERSIONS_BEARER_TOKEN")
+    if bearer_token:
+        headers["Authorization"] = f"Bearer {bearer_token}"
+
+    try:
+        response = requests.post(
+            SOFTWARE_VERSIONS_API_URL,
+            json={"vin": vin, "variant": variant},
+            headers=headers,
+            timeout=20,
+            allow_redirects=False,
+        )
+        return Response(
+            content=response.content,
+            status_code=response.status_code,
+            media_type=response.headers.get("content-type", "application/json"),
+        )
+    except requests.RequestException as error:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Could not fetch software versions: {type(error).__name__}"
         ) from error

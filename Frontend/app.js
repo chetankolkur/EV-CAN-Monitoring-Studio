@@ -3,9 +3,11 @@ import { parseDbc, filterDbcMessages, decodeMessage, encodeRandom } from "./dbc.
 import { SlcanTransport, PcanUsbTransport, SimulatorTransport } from "./transports.js";
 
 const DBC_ECUS = ["BMS", "MCU", "TCU", "MiddleWare"];
+const FIRMWARE_COMPONENTS = ["BMS", "BMSCONFIG", "CLUSTER", "MCU", "MIDDLEWARE", "TCU"];
 const DBC_SOURCE_FOR_TAB = { Cluster: "MCU" };
 const DBC_VERSIONS_URL = "/api/dbc-versions";
 const DBC_FILES_URL = "/api/dbc-files";
+const SOFTWARE_VERSIONS_URL = "/api/software-versions";
 const RAW_ROWS = 200;
 const STALE_MS = 3000;
 const MAX_SIGNAL_HISTORY = 120;
@@ -18,6 +20,45 @@ const SIGNAL_CHART_HEIGHT = 340;
 const GRAPH_AXIS_WIDTH = 58;
 
 const $ = (id) => document.getElementById(id);
+
+const THEME_STORAGE_KEY = "ev_can_theme";
+
+function getThemeCanvasColors() {
+    const light = document.documentElement.dataset.theme === "light";
+    return {
+        text: light ? "#475569" : "#8a9199",
+        strongText: light ? "#0f172a" : "#e7e9ea",
+        grid: light ? "#cbd5e1" : "#33393f",
+        accent: light ? "#c77816" : "#e8a33d",
+        crosshair: light ? "#64748b" : "#d9dde1"
+    };
+}
+
+function updateThemeToggle(theme) {
+    const button = $("themeToggle");
+    if (!button) return;
+    const isDark = theme === "dark";
+    button.setAttribute("aria-label", isDark ? "Switch to light theme" : "Switch to dark theme");
+    button.setAttribute("title", isDark ? "Switch to light theme" : "Switch to dark theme");
+    button.innerHTML = isDark
+        ? '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20.1 15.2A8.5 8.5 0 0 1 8.8 3.9a8.5 8.5 0 1 0 11.3 11.3Z"/></svg>'
+        : '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.42 1.42M17.65 17.65l1.42 1.42M2 12h2M20 12h2M4.93 19.07l1.42-1.42M17.65 6.35l1.42-1.42"/></svg>';
+    const themeColor = document.querySelector('meta[name="theme-color"]');
+    if (themeColor) themeColor.setAttribute("content", isDark ? "#15181b" : "#f8fafc");
+}
+
+function setTheme(theme, persist = true) {
+    const nextTheme = theme === "light" ? "light" : "dark";
+    document.documentElement.dataset.theme = nextTheme;
+    if (persist) {
+        try { localStorage.setItem(THEME_STORAGE_KEY, nextTheme); } catch (error) {}
+    }
+    updateThemeToggle(nextTheme);
+    renderGraphView(true);
+    for (const [key, row] of state.signalRows) {
+        if (row.chartCanvas) drawSignalChart(key, row.chartCanvas);
+    }
+}
 
 const state = {
     dbc: null,
@@ -55,8 +96,16 @@ const state = {
     rawDirty: false,
     recording: false,
     recordRows: [],
-    lastFrameAt: 0
+    lastFrameAt: 0,
+    firmwareExpectedComponents: null,
+    firmwareCurrentTcuVersion: null
 };
+
+const initialTheme = document.documentElement.dataset.theme === "light" ? "light" : "dark";
+updateThemeToggle(initialTheme);
+$("themeToggle").addEventListener("click", () => {
+    setTheme(document.documentElement.dataset.theme === "dark" ? "light" : "dark");
+});
 
 // ---------------------------------------------------------------- logging
 function log(text) {
@@ -65,8 +114,13 @@ function log(text) {
 }
 
 function setStatus(text, level = "idle") {
-    $("statusText").textContent = text;
-    $("statusDot").className = `bc-dot ${level}`;
+    const pillText = level === "ok" || level === "warn"
+        ? "Connected"
+        : level === "error"
+            ? "Disconnected"
+            : "Disconnected";
+    $("statusText").textContent = pillText;
+    $("statusDot").className = pillText === "Connected" ? "bc-dot ok" : "bc-dot";
     updateSidebarStatus(text, level);
     log(text);
 }
@@ -492,7 +546,6 @@ function handleFrame(frame) {
 
     const canId = `0x${hex(frame.id, frame.extended ? 8 : 3)}`;
     state.uniqueIds.add(`${frame.extended ? "x" : "s"}${frame.id}`);
-
     let messageName = "Not in DBC";
     if (state.dbcs.size && !frame.rtr) {
         const resolved = resolveFrameMessage(frame);
@@ -560,6 +613,448 @@ function handleFrame(frame) {
         state.rawDirty = true;
     }
 }
+
+function normalizeFirmwareVersion(value) {
+    return String(value)
+        .normalize("NFKC")
+        .replace(/\0/g, "")
+        .trim()
+        .replace(/\s+/g, "")
+        .toLowerCase()
+        .replace(/[^a-z0-9]/g, "")
+        .replace(/^v(?=\d)/, "");
+}
+
+function firmwareNameTokens(signal) {
+    return `${signal.message} ${signal.name}`
+        .replace(/([a-z])([A-Z])/g, "$1 $2")
+        .toLowerCase()
+        .split(/[^a-z0-9]+/)
+        .filter(Boolean);
+}
+
+function hasFirmwareName(tokens) {
+    return tokens.some((token) =>
+        ["sw", "fw", "version", "versions", "ver", "config", "configuration", "software", "firmware"].includes(token) ||
+        /^(?:sw|fw)(?:version|ver|config)?\d*$/.test(token) ||
+        /^(?:version|versions|ver|config|configuration)\d*$/.test(token)
+    );
+}
+
+function hasConfigName(tokens) {
+    return tokens.some((token) => token === "config" || token === "configuration" || token.endsWith("config"));
+}
+
+function hasClusterName(tokens) {
+    return tokens.some((token) => token === "cluster" || token.startsWith("cluster") || token.endsWith("cluster"));
+}
+
+function firmwareSignalFamily(name) {
+    return name.toLowerCase()
+        .replace(/(?:byte|char|index|part)?\d+$/, "")
+        .replace(/[^a-z0-9]/g, "");
+}
+
+function isFirmwareText(value) {
+    return typeof value === "string" && /[a-z]/i.test(value) && /\d/.test(value);
+}
+
+function signalValueText(signal, expected) {
+    if (signal.ascii && (signal.ascii.length > 1 || normalizeFirmwareVersion(signal.ascii) === normalizeFirmwareVersion(expected))) {
+        return signal.ascii;
+    }
+    if (typeof signal.display === "string" && signal.display !== String(signal.value)) {
+        return signal.display;
+    }
+    return String(signal.value);
+}
+
+const BMS_FIRMWARE_SIGNAL_NAMES = [
+    "Internal_Firm_Vers_4",
+    "Internal_Firm_Sub_Vers_1",
+    "Internal_Frim_Sub_Vers_2",
+    "Internal_Frim_Sub_Vers_3",
+    "Internal_Firm_Sub_Vers_4"
+];
+const BMSCONFIG_FIRMWARE_SIGNAL_NAMES = [
+    "Internal_Firm_Vers_1",
+    "Internal_Firm_Vers_2",
+    "Internal_Firm_Vers_3"
+];
+const MCU_FIRMWARE_SIGNAL_NAMES = [
+    "MajorVersion",
+    "MinorVersion",
+    "SubMinorVersion"
+];
+const MCU_FIRMWARE_MESSAGE_NAME = "E3_159h_SWVersion";
+const MCU_FIRMWARE_CAN_ID = "0x159";
+const CLUSTER_SOFTWARE_VERSION_SIGNAL_NAME = "Cluster_software_version";
+
+function bmsFirmwareSignalText(signal) {
+    const value = typeof signal.value === "string"
+        ? signal.value
+        : typeof signal.display === "string"
+            ? signal.display
+            : signal.value;
+    if (typeof value === "string") return value.replace(/\0/g, "").trim();
+    if (typeof value === "number" && Number.isInteger(value)) {
+        if (value >= 0 && value <= 9) return String(value);
+        if (value >= 32 && value <= 126) return String.fromCharCode(value).replace(/\0/g, "").trim();
+    }
+    return String(value).replace(/\0/g, "").trim();
+}
+
+function getBmsFirmwareLiveValue() {
+    const latestSignals = new Map();
+    const requiredNames = new Set(BMS_FIRMWARE_SIGNAL_NAMES);
+    for (const signal of state.signals.values()) {
+        if (signal.ecu !== "BMS" || !requiredNames.has(signal.name)) continue;
+        const previous = latestSignals.get(signal.name);
+        if (!previous || signal.updatedAt >= previous.updatedAt) {
+            latestSignals.set(signal.name, signal);
+        }
+    }
+
+    const receivedParts = BMS_FIRMWARE_SIGNAL_NAMES
+        .filter((name) => latestSignals.has(name))
+        .map((name) => bmsFirmwareSignalText(latestSignals.get(name)));
+    return receivedParts.length ? receivedParts.join("") : null;
+}
+
+function getBmsConfigFirmwareLiveValue() {
+    const latestSignals = new Map();
+    const requiredNames = new Set(BMSCONFIG_FIRMWARE_SIGNAL_NAMES);
+    for (const signal of state.signals.values()) {
+        if (signal.ecu !== "BMS" || !requiredNames.has(signal.name)) continue;
+        const previous = latestSignals.get(signal.name);
+        if (!previous || signal.updatedAt >= previous.updatedAt) {
+            latestSignals.set(signal.name, signal);
+        }
+    }
+
+    const receivedParts = BMSCONFIG_FIRMWARE_SIGNAL_NAMES
+        .filter((name) => latestSignals.has(name))
+        .map((name) => bmsFirmwareSignalText(latestSignals.get(name)));
+    return receivedParts.length ? receivedParts.join("") : null;
+}
+
+function getMcuFirmwareLiveValue() {
+    const latestSignals = new Map();
+    const requiredNames = new Set(MCU_FIRMWARE_SIGNAL_NAMES);
+    for (const signal of state.signals.values()) {
+        if (signal.ecu !== "MCU" ||
+            signal.message !== MCU_FIRMWARE_MESSAGE_NAME ||
+            signal.canId !== MCU_FIRMWARE_CAN_ID ||
+            !requiredNames.has(signal.name)) continue;
+        const previous = latestSignals.get(signal.name);
+        if (!previous || signal.updatedAt >= previous.updatedAt) {
+            latestSignals.set(signal.name, signal);
+        }
+    }
+
+    const versionParts = MCU_FIRMWARE_SIGNAL_NAMES.map((name) => latestSignals.get(name));
+    if (versionParts.some((signal) =>
+        !signal || typeof signal.value !== "number" || !Number.isInteger(signal.value)
+    )) return null;
+
+    const [major, minor, subMinor] = versionParts.map(({ value }) => String(value).trim());
+    return `V-${major}.${minor}.${subMinor}`;
+}
+
+function getClusterFirmwareLiveValue() {
+    let latestSignal = null;
+    for (const signal of state.signals.values()) {
+        if (signal.ecu !== "Cluster" || signal.name !== CLUSTER_SOFTWARE_VERSION_SIGNAL_NAME) continue;
+        if (!latestSignal || signal.updatedAt >= latestSignal.updatedAt) {
+            latestSignal = signal;
+        }
+    }
+    if (!latestSignal) return null;
+
+    const value = typeof latestSignal.display === "string" &&
+        latestSignal.display !== String(latestSignal.value)
+        ? latestSignal.display
+        : typeof latestSignal.ascii === "string"
+            ? latestSignal.ascii
+            : latestSignal.value;
+    return String(value).replace(/\0/g, "").trim();
+}
+
+function getTcuFirmwareLiveValue() {
+    if (state.firmwareCurrentTcuVersion === null) return "Unavailable";
+
+    let version = String(state.firmwareCurrentTcuVersion).replace(/\0/g, "").trim();
+    if (!version) return "Unavailable";
+
+    const vehicleVersionIndex = version.toLowerCase().lastIndexOf("veh-");
+    if (vehicleVersionIndex >= 0) {
+        version = version.slice(vehicleVersionIndex + 4).trim();
+    } else {
+        const trailingVersion = version.match(/(?:^|[^a-z0-9])((?:v-?)?\d+(?:\.\d+)+)$/i);
+        if (trailingVersion) version = trailingVersion[1];
+    }
+
+    version = version.replace(/^v-?/i, "").trim();
+    return version ? `V-${version}` : "Unavailable";
+}
+
+function getFirmwareLiveValue(component, expected) {
+    if (component === "BMS") return getBmsFirmwareLiveValue();
+    if (component === "BMSCONFIG") return getBmsConfigFirmwareLiveValue();
+    if (component === "MCU") return getMcuFirmwareLiveValue();
+    if (component === "CLUSTER") return getClusterFirmwareLiveValue();
+    if (component === "TCU") return getTcuFirmwareLiveValue();
+
+    const groups = new Map();
+    const expectedValue = normalizeFirmwareVersion(expected);
+    for (const signal of state.signals.values()) {
+        const tokens = firmwareNameTokens(signal);
+        const hasConfig = hasConfigName(tokens);
+        const hasCluster = hasClusterName(tokens);
+        const value = signalValueText(signal, expected);
+        const exactMatch = expectedValue && normalizeFirmwareVersion(value) === expectedValue;
+        const named = hasFirmwareName(tokens);
+        const asciiCandidate = isFirmwareText(signal.ascii);
+        const labelledValue = typeof signal.display === "string" && signal.display !== String(signal.value);
+        if (!named && !asciiCandidate && !(labelledValue && exactMatch)) continue;
+
+        let belongs = false;
+        switch (component) {
+            case "BMS":
+                belongs = signal.ecu === "BMS" && (!hasConfig || exactMatch);
+                break;
+            case "BMSCONFIG":
+                belongs = signal.ecu === "BMS" && (hasConfig || (exactMatch && asciiCandidate));
+                break;
+            case "MCU":
+                belongs = signal.ecu === "MCU";
+                break;
+            case "TCU":
+                belongs = signal.ecu === "TCU";
+                break;
+            case "CLUSTER":
+                belongs = signal.ecu === "Cluster" && hasCluster;
+                break;
+            case "MIDDLEWARE":
+                belongs = signal.ecu === "MiddleWare";
+                break;
+            default:
+                break;
+        }
+        if (!belongs) continue;
+
+        const groupKey = `${signal.ecu}.${signal.message}`;
+        if (!groups.has(groupKey)) groups.set(groupKey, { signals: [], score: 0 });
+        const group = groups.get(groupKey);
+        group.signals.push({ signal, tokens });
+        group.score = Math.max(
+            group.score,
+            (exactMatch ? 100 : 0) +
+            (named ? 20 : 0) +
+            ((component === "BMSCONFIG" && hasConfig) || (component === "CLUSTER" && hasCluster) ? 30 : 0)
+        );
+    }
+    if (!groups.size) return null;
+
+    const best = [...groups.values()].sort((left, right) => right.score - left.score)[0];
+    const asciiSignals = best.signals
+        .filter(({ signal }) => typeof signal.ascii === "string")
+        .sort((left, right) => left.signal.startBit - right.signal.startBit);
+    const asciiFamilies = new Set(asciiSignals.map(({ signal }) => firmwareSignalFamily(signal.name)));
+    if (asciiSignals.length > 1 && asciiFamilies.size === 1 &&
+        asciiSignals.every(({ signal }) => signal.length <= 8)) {
+        return asciiSignals.map(({ signal }) => signal.ascii).join("");
+    }
+    if (asciiSignals.length) {
+        const bestAscii = asciiSignals.sort((left, right) =>
+            Number(normalizeFirmwareVersion(right.signal.ascii) === expectedValue) -
+            Number(normalizeFirmwareVersion(left.signal.ascii) === expectedValue)
+        )[0];
+        if (bestAscii.signal.ascii.length > 1 || best.signals.length === 1) return bestAscii.signal.ascii;
+    }
+
+    const versionParts = best.signals.filter(({ tokens }) =>
+        tokens.some((token) => ["major", "minor", "patch", "revision", "build"].includes(token))
+    );
+    if (versionParts.length > 1) {
+        return versionParts
+            .sort((left, right) => left.signal.startBit - right.signal.startBit)
+            .map(({ signal }) => String(signal.value))
+            .join(".");
+    }
+    const bestSignal = best.signals.sort((left, right) =>
+        Number(normalizeFirmwareVersion(signalValueText(right.signal, expected)) === expectedValue) -
+        Number(normalizeFirmwareVersion(signalValueText(left.signal, expected)) === expectedValue)
+    )[0];
+    return signalValueText(bestSignal.signal, expected);
+}
+
+function renderFirmwareVersionComparison() {
+    const components = state.firmwareExpectedComponents;
+    const rows = $("firmware-component-rows");
+    const summary = $("firmware-overall-status");
+
+    if (!components) {
+        if (rows.dataset.renderSignature === "no-api") return;
+        rows.dataset.renderSignature = "no-api";
+        rows.replaceChildren();
+        const row = document.createElement("tr");
+        const cell = document.createElement("td");
+        cell.colSpan = 4;
+        cell.className = "bc-empty";
+        cell.textContent = "Submit a VIN to load expected ECU component versions.";
+        row.appendChild(cell);
+        rows.appendChild(row);
+        summary.className = "pill idle";
+        summary.textContent = "Not checked";
+        return;
+    }
+
+    const componentValues = FIRMWARE_COMPONENTS.map((component) => {
+        const expected = components[component];
+        const live = expected === null && component !== "CLUSTER" && component !== "TCU"
+            ? null
+            : getFirmwareLiveValue(component, expected);
+        return { component, expected, live };
+    });
+    const renderSignature = JSON.stringify(componentValues);
+    if (rows.dataset.renderSignature === renderSignature) return;
+    rows.dataset.renderSignature = renderSignature;
+    rows.replaceChildren();
+
+    const activeStatuses = [];
+    for (const { component, expected, live } of componentValues) {
+        const matches = expected !== null && live !== null &&
+            (component === "BMS" || component === "BMSCONFIG" || component === "MCU" || component === "TCU"
+                ? String(expected).trim().toLowerCase() === String(live).trim().toLowerCase()
+                : normalizeFirmwareVersion(expected) === normalizeFirmwareVersion(live));
+        if (expected !== null) activeStatuses.push(matches);
+
+        const row = document.createElement("tr");
+        const values = [
+            component,
+            expected === null ? "N/A" : expected,
+            expected === null && component !== "CLUSTER" && component !== "TCU"
+                ? "N/A"
+                : live === null ? "Waiting for frame..." : live
+        ];
+        for (const value of values) {
+            const cell = document.createElement("td");
+            cell.textContent = value;
+            row.appendChild(cell);
+        }
+
+        const statusCell = document.createElement("td");
+        const badge = document.createElement("span");
+        if (expected === null) {
+            badge.className = "pill firmware-na";
+            badge.textContent = "N/A";
+        } else {
+            badge.className = `pill ${matches ? "firmware-match" : "firmware-mismatch"}`;
+            badge.textContent = matches ? "Matching" : "Not Matching";
+        }
+        statusCell.appendChild(badge);
+        row.appendChild(statusCell);
+        rows.appendChild(row);
+    }
+
+    if (!activeStatuses.length) {
+        summary.className = "pill firmware-na";
+        summary.textContent = "N/A";
+    } else {
+        const allMatch = activeStatuses.every(Boolean);
+        summary.className = `pill ${allMatch ? "firmware-match" : "firmware-mismatch"}`;
+        summary.textContent = allMatch ? "Matching" : "Not Matching";
+    }
+}
+
+function apiErrorMessage(payload, rawBody, status) {
+    if (typeof payload === "string" && payload.trim()) return payload.trim();
+    if (payload && typeof payload === "object") {
+        for (const key of ["detail", "message", "error", "Message"]) {
+            const value = payload[key];
+            if (typeof value === "string" && value.trim()) return value.trim();
+        }
+        const serialized = JSON.stringify(payload);
+        if (serialized && serialized !== "{}") return serialized;
+    }
+    if (rawBody.trim()) return rawBody.trim();
+    return `Request failed with status ${status}.`;
+}
+
+async function submitFirmwareVersionCheck(event) {
+    event.preventDefault();
+    const vinInput = $("firmware-vin");
+    const vin = vinInput.value.trim();
+    const error = $("firmware-version-error");
+    const button = $("firmware-submit");
+    if (!vin) {
+        vinInput.setCustomValidity("Please enter a VIN.");
+        vinInput.reportValidity();
+        return;
+    }
+    vinInput.setCustomValidity("");
+
+    state.firmwareExpectedComponents = null;
+    state.firmwareCurrentTcuVersion = null;
+    error.hidden = true;
+    button.disabled = true;
+    button.setAttribute("aria-busy", "true");
+    button.textContent = "Loading…";
+    renderFirmwareVersionComparison();
+    try {
+        const response = await fetch(SOFTWARE_VERSIONS_URL, {
+            method: "POST",
+            headers: { "Content-Type": "application/json", "Accept": "application/json" },
+            body: JSON.stringify({ vin, variant: $("firmware-variant").value })
+        });
+        const rawBody = await response.text();
+        let payload = null;
+        try {
+            payload = rawBody ? JSON.parse(rawBody) : null;
+        } catch {
+            if (response.ok) throw new Error("The software versions API returned invalid JSON.");
+        }
+        if (!response.ok) {
+            throw new Error(apiErrorMessage(payload, rawBody, response.status));
+        }
+        if (payload && payload.ok === false) {
+            throw new Error(apiErrorMessage(payload, rawBody, response.status));
+        }
+        if (!payload || !payload.ecu || !payload.ecu.components ||
+            typeof payload.ecu.components !== "object" || Array.isArray(payload.ecu.components)) {
+            throw new Error("The API response did not contain ecu.components.");
+        }
+        state.firmwareExpectedComponents = Object.fromEntries(
+            FIRMWARE_COMPONENTS.map((component) => {
+                const value = payload.ecu.components[component];
+                if (value !== null && value !== undefined && typeof value !== "string" && typeof value !== "number") {
+                    throw new Error(`The API returned an invalid ${component} version.`);
+                }
+                return [component, value === null || value === undefined ? null : String(value)];
+            })
+        );
+        const currentTcuVersion = payload.currentTcuVersion !== null && payload.currentTcuVersion !== undefined
+            ? payload.currentTcuVersion
+            : payload.ecu.currentTcuVersion;
+        state.firmwareCurrentTcuVersion =
+            typeof currentTcuVersion === "string" || typeof currentTcuVersion === "number"
+                ? String(currentTcuVersion)
+                : null;
+        renderFirmwareVersionComparison();
+    } catch (requestError) {
+        error.textContent = `Could not verify firmware version: ${requestError.message}`;
+        error.hidden = false;
+        renderFirmwareVersionComparison();
+    } finally {
+        button.disabled = false;
+        button.removeAttribute("aria-busy");
+        button.textContent = "Submit";
+    }
+}
+
+$("firmware-version-form").addEventListener("submit", submitFirmwareVersionCheck);
+$("firmware-vin").addEventListener("input", (event) => event.currentTarget.setCustomValidity(""));
 
 // ---------------------------------------------------------------- ECU tests
 const ECU_CELL_SPREAD_LIMIT_MV = 200;
@@ -1032,6 +1527,7 @@ function renderGraphRangeControls() {
 
 function drawGraphCanvas(hoverTime = null) {
     const canvas = $("graphCanvas");
+    const themeColors = getThemeCanvasColors();
     const now = Date.now();
     const signals = [...state.graphSignals].map((key) => ({
         key,
@@ -1104,10 +1600,10 @@ function drawGraphCanvas(hoverTime = null) {
     context.font = "11px Inter, sans-serif";
     context.textAlign = "left";
     context.textBaseline = "middle";
-    context.fillStyle = "#8a9199";
+    context.fillStyle = themeColors.text;
     context.fillText("One shared time axis · each colored Y scale matches its signal", plotLeft, 19);
 
-    context.strokeStyle = "#33393f";
+    context.strokeStyle = themeColors.grid;
     context.lineWidth = 1;
     for (let tick = 0; tick <= 5; tick++) {
         const ratio = tick / 5;
@@ -1123,7 +1619,7 @@ function drawGraphCanvas(hoverTime = null) {
         context.stroke();
         context.textAlign = "center";
         context.textBaseline = "top";
-        context.fillStyle = "#8a9199";
+        context.fillStyle = themeColors.text;
         context.fillText(
             new Date(firstTime + ratio * timeSpan).toLocaleTimeString([], { hour12: false }),
             x,
@@ -1136,7 +1632,7 @@ function drawGraphCanvas(hoverTime = null) {
     context.rotate(-Math.PI / 2);
     context.textAlign = "center";
     context.textBaseline = "middle";
-    context.fillStyle = "#8a9199";
+    context.fillStyle = themeColors.text;
     context.fillText("Signal values · color-coded scales", 0, 0);
     context.restore();
 
@@ -1193,7 +1689,7 @@ function drawGraphCanvas(hoverTime = null) {
     context.font = "11px Inter, sans-serif";
     context.textAlign = "center";
     context.textBaseline = "bottom";
-    context.fillStyle = "#8a9199";
+    context.fillStyle = themeColors.text;
     context.fillText("Time", plotLeft + plotWidth / 2, height - 5);
     state.graphDomain = { firstTime, lastTime, plotLeft, plotRight, plotTop, plotBottom, series };
 
@@ -1203,6 +1699,7 @@ function drawGraphCanvas(hoverTime = null) {
 function drawGraphCrosshair(timestamp) {
     const canvas = $("graphCanvas");
     const domain = state.graphDomain;
+    const themeColors = getThemeCanvasColors();
     if (!domain || canvas.hidden) return;
     const context = canvas.getContext("2d");
     const dpr = window.devicePixelRatio || 1;
@@ -1211,7 +1708,7 @@ function drawGraphCrosshair(timestamp) {
         : (timestamp - domain.firstTime) / (domain.lastTime - domain.firstTime)) * (domain.plotRight - domain.plotLeft);
     context.save();
     context.setTransform(dpr, 0, 0, dpr, 0, 0);
-    context.strokeStyle = "#d9dde1";
+    context.strokeStyle = themeColors.crosshair;
     context.lineWidth = 1;
     context.setLineDash([4, 4]);
     context.beginPath();
@@ -1281,6 +1778,7 @@ function drawSignalChart(key, canvas) {
     const sig = state.signals.get(key);
     const history = (state.signalHistory.get(key) || []).slice(-MAX_SIGNAL_HISTORY);
     if (!sig || !history.length || canvas.closest(".signal-chart-row").hidden) return;
+    const themeColors = getThemeCanvasColors();
 
     const width = canvas.clientWidth;
     if (!width) return;
@@ -1311,9 +1809,9 @@ function drawSignalChart(key, canvas) {
     context.font = "12px Inter, sans-serif";
     context.textBaseline = "middle";
     context.textAlign = "left";
-    context.fillStyle = "#e7e9ea";
+    context.fillStyle = themeColors.strongText;
     context.fillText(`Graph View · ${sig.name}`, 16, 17);
-    context.fillStyle = "#e8a33d";
+    context.fillStyle = themeColors.accent;
     context.font = "600 13px Inter, sans-serif";
     context.fillText(`${formatValue(sig)}${sig.unit ? ` ${sig.unit}` : ""}`, 16, 36);
 
@@ -1322,12 +1820,12 @@ function drawSignalChart(key, canvas) {
     for (let tick = 0; tick <= 4; tick++) {
         const ratio = tick / 4;
         const y = plot.bottom - ratio * plotHeight;
-        context.strokeStyle = "#33393f";
+        context.strokeStyle = themeColors.grid;
         context.beginPath();
         context.moveTo(plot.left, y);
         context.lineTo(plot.right, y);
         context.stroke();
-        context.fillStyle = "#8a9199";
+        context.fillStyle = themeColors.text;
         context.fillText(formatAxisValue(min + ratio * (max - min)), plot.left - 8, y);
     }
 
@@ -1335,11 +1833,11 @@ function drawSignalChart(key, canvas) {
     context.translate(14, plot.top + plotHeight / 2);
     context.rotate(-Math.PI / 2);
     context.textAlign = "center";
-    context.fillStyle = "#8a9199";
+    context.fillStyle = themeColors.text;
     context.fillText(sig.unit ? `Value (${sig.unit})` : "Value", 0, 0);
     context.restore();
 
-    context.strokeStyle = "#e8a33d";
+    context.strokeStyle = themeColors.accent;
     context.lineWidth = 2;
     context.beginPath();
     history.forEach((point, index) => {
@@ -1355,7 +1853,7 @@ function drawSignalChart(key, canvas) {
 
     if (history.length === 1) {
         const y = plot.bottom - ((history[0].value - min) / (max - min)) * plotHeight;
-        context.fillStyle = "#e8a33d";
+        context.fillStyle = themeColors.accent;
         context.beginPath();
         context.arc(plot.left + plotWidth / 2, y, 4, 0, Math.PI * 2);
         context.fill();
@@ -1364,12 +1862,12 @@ function drawSignalChart(key, canvas) {
     context.font = "11px Inter, sans-serif";
     context.textAlign = "center";
     context.textBaseline = "top";
-    context.fillStyle = "#8a9199";
+    context.fillStyle = themeColors.text;
     for (let tick = 0; tick <= 4; tick++) {
         const ratio = tick / 4;
         const x = plot.left + ratio * plotWidth;
         const time = firstTime + ratio * timeSpan;
-        context.strokeStyle = "#33393f";
+        context.strokeStyle = themeColors.grid;
         context.beginPath();
         context.moveTo(x, plot.top);
         context.lineTo(x, plot.bottom);
@@ -1601,6 +2099,7 @@ setInterval(() => {
     renderRaw();
     renderUnmatchedInfo();
     renderEcuTests();
+    renderFirmwareVersionComparison();
 }, 250);
 
 setInterval(pruneSignalHistory, 60_000);
@@ -1609,12 +2108,12 @@ setInterval(() => {
     state.framesThisSecond = 0;
     if (state.transport && state.lastFrameAt && Date.now() - state.lastFrameAt > STALE_MS) {
         const text = "Connected · no CAN traffic for 3 s (check bus power, wiring, bitrate)";
-        $("statusText").textContent = text;
-        $("statusDot").className = "bc-dot warn";
+        $("statusText").textContent = "Connected";
+        $("statusDot").className = "bc-dot ok";
         updateSidebarStatus(text, "warn");
     } else if (state.transport && state.lastFrameAt) {
         const text = "Connected · receiving CAN frames";
-        $("statusText").textContent = text;
+        $("statusText").textContent = "Connected";
         $("statusDot").className = "bc-dot ok";
         updateSidebarStatus(text, "ok");
     }
@@ -1714,6 +2213,8 @@ async function connect() {
     if (!state.dbc) log("Warning: no DBC loaded. Frames will be shown as raw data only.");
     const transport = createTransport(kind);
     $("connectBtn").disabled = true;
+    $("statusText").textContent = "Connecting...";
+    $("statusDot").className = "bc-dot";
     try {
         await transport.open();
         state.transport = transport;
@@ -1736,6 +2237,7 @@ async function disconnect() {
     const transport = state.transport;
     state.transport = null;
     if (transport) await transport.close();
+    setStatus("Adapter disconnected.", "idle");
     $("connectBtn").disabled = false;
     $("disconnectBtn").disabled = true;
     $("transportSelect").disabled = false;

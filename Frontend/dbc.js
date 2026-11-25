@@ -225,6 +225,36 @@ function rawToPhysical(raw, signal) {
     return Number.isInteger(physical) ? physical : Number(physical.toPrecision(12));
 }
 
+function decodeAsciiSignal(signal, data, messageName) {
+    if (signal.length < 8 || signal.length > 256 || signal.length % 8 !== 0) return null;
+    if (signal.valueType !== "int") return null;
+    const nameTokens = `${messageName} ${signal.name}`
+        .replace(/([a-z])([A-Z])/g, "$1 $2")
+        .toLowerCase()
+        .split(/[^a-z0-9]+/)
+        .filter(Boolean);
+    const versionSignal = nameTokens.some((token) =>
+        ["sw", "fw", "version", "versions", "ver", "config", "configuration", "software", "firmware"].includes(token) ||
+        /^(?:sw|fw)(?:version|ver|config)?\d*$/.test(token) ||
+        /^(?:version|versions|ver|config|configuration)\d*$/.test(token)
+    );
+    if (signal.length === 8 && !versionSignal) return null;
+
+    const raw = BigInt(extractRaw(data, signal));
+    const byteCount = signal.length / 8;
+    const bytes = Array.from({ length: byteCount }, (_, index) => {
+        const shift = signal.littleEndian ? index * 8 : (byteCount - index - 1) * 8;
+        return Number((raw >> BigInt(shift)) & 0xffn);
+    });
+    while (bytes.length && (bytes[bytes.length - 1] === 0 || bytes[bytes.length - 1] === 0xff)) {
+        bytes.pop();
+    }
+    if (!bytes.length || bytes.some((byte) => byte < 32 || byte > 126)) return null;
+
+    const value = String.fromCharCode(...bytes).trim();
+    return value || null;
+}
+
 export function decodeMessage(message, data) {
     const results = [];
     let muxValue = null;
@@ -241,6 +271,9 @@ export function decodeMessage(message, data) {
             name: signal.name,
             value,
             display: label !== undefined ? label : value,
+            ascii: decodeAsciiSignal(signal, data, message.name),
+            startBit: signal.startBit,
+            length: signal.length,
             unit: signal.unit,
             min: signal.min,
             max: signal.max
