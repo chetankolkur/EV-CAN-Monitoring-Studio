@@ -1,8 +1,13 @@
+import json
+import logging
 import os
 import re
+import time
 from pathlib import Path
 from urllib.parse import urlsplit
+
 from dotenv import load_dotenv
+
 load_dotenv()
 
 import requests
@@ -10,12 +15,102 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 
+logger = logging.getLogger("e3-diagnostic-software")
+logging.basicConfig(level=logging.INFO)
+
+# Keys pulled from AWS Secrets Manager JSON into os.environ (if not already set).
+SECRET_ENV_KEYS = (
+    "SOFTWARE_VERSIONS_API_KEY",
+    "SOFTWARE_VERSIONS_BEARER_TOKEN",
+    "DOCUMENTS_API_URL",
+    "SOFTWARE_VERSIONS_API_URL",
+)
+
+
+def load_secrets_from_aws() -> None:
+    """
+    Load secrets from AWS Secrets Manager when SECRETS_MANAGER_SECRET_NAME is set.
+    Soft-skips when unset so local .env still works.
+    """
+    secret_id = (
+        os.environ.get("SECRETS_MANAGER_SECRET_NAME")
+        or os.environ.get("SECRET_NAME")
+        or ""
+    ).strip()
+    if not secret_id:
+        logger.info("SECRETS_MANAGER_SECRET_NAME not set — using env/.env only")
+        return
+
+    region = os.environ.get("AWS_REGION", "ap-south-1")
+    max_attempts = 6
+    delay_s = 5
+
+    try:
+        import boto3
+        from botocore.exceptions import BotoCoreError, ClientError
+    except ImportError:
+        logger.error("boto3 is required to load Secrets Manager secrets")
+        return
+
+    client = boto3.client("secretsmanager", region_name=region)
+    last_error = None
+
+    for attempt in range(1, max_attempts + 1):
+        try:
+            resp = client.get_secret_value(SecretId=secret_id)
+            raw = resp.get("SecretString") or ""
+            data = json.loads(raw)
+            if not isinstance(data, dict):
+                raise ValueError("Secret JSON must be an object")
+
+            applied = []
+            for key in SECRET_ENV_KEYS:
+                value = data.get(key)
+                if value is None or str(value) == "":
+                    continue
+                if not os.environ.get(key):
+                    os.environ[key] = str(value)
+                    applied.append(key)
+
+            logger.info(
+                "Loaded secrets from AWS Secrets Manager: %s keys=%s",
+                secret_id,
+                applied,
+            )
+            return
+        except (BotoCoreError, ClientError, ValueError, json.JSONDecodeError) as error:
+            last_error = error
+            logger.error(
+                "Failed to load secrets from Secrets Manager (%s) attempt %s/%s: %s",
+                secret_id,
+                attempt,
+                max_attempts,
+                error,
+            )
+            if attempt < max_attempts:
+                logger.info(
+                    "Retrying Secrets Manager in %ss (Pod Identity warmup)...",
+                    delay_s,
+                )
+                time.sleep(delay_s)
+
+    logger.error("Giving up loading secrets from %s: %s", secret_id, last_error)
+
+
+load_secrets_from_aws()
+
 app = FastAPI(title="EV CAN Browser Monitor")
 
 BASE_DIR = Path(__file__).resolve().parent
 FRONTEND_DIR = BASE_DIR / "Frontend"
-DOCUMENTS_API_URL = "https://ke76ricmk3.execute-api.ap-south-1.amazonaws.com/prod/documents"
-SOFTWARE_VERSIONS_API_URL = "https://ke76ricmk3.execute-api.ap-south-1.amazonaws.com/prod/software-versions"
+DOCUMENTS_API_URL = os.environ.get(
+    "DOCUMENTS_API_URL",
+    "https://ke76ricmk3.execute-api.ap-south-1.amazonaws.com/prod/documents",
+)
+SOFTWARE_VERSIONS_API_URL = os.environ.get(
+    "SOFTWARE_VERSIONS_API_URL",
+    "https://ke76ricmk3.execute-api.ap-south-1.amazonaws.com/prod/software-versions",
+)
 DBC_ECU_BY_FILENAME = {
     "bms.dbc": "BMS",
     "mcu.dbc": "MCU",
@@ -131,6 +226,11 @@ def load_dbc_version(path):
 def home():
     """Dashboard that reads the CAN adapter in Chrome via WebUSB/Web Serial."""
     return FileResponse(FRONTEND_DIR / "index.html")
+
+
+@app.get("/api/v1/health")
+def health():
+    return {"status": "ok"}
 
 
 @app.get("/browser-can")
