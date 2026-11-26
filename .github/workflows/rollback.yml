@@ -1,0 +1,115 @@
+name: Rollback (EKS)
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Target environment
+        required: true
+        type: choice
+        options:
+          - prod
+          - dev
+          - test
+        default: prod
+      revision:
+        description: Helm revision to rollback to (leave empty for previous)
+        required: false
+        type: string
+
+permissions:
+  id-token: write
+  contents: read
+
+concurrency:
+  group: e3-diagnostic-software-rollback-${{ github.event.inputs.environment }}
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: ${{ vars.AWS_REGION || 'ap-south-1' }}
+  EKS_CLUSTER: ${{ vars.EKS_CLUSTER || 'e3-eks' }}
+  IAM_ROLE_ARN: ${{ vars.IAM_ROLE_ARN || 'arn:aws:iam::222634361936:role/GitHubActions-ECR-EKS' }}
+  HELM_RELEASE: ${{ vars.HELM_RELEASE || 'e3-diagnostic-software' }}
+
+jobs:
+  Rollback:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: ${{ github.event.inputs.environment }}
+    outputs:
+      namespace: ${{ steps.meta.outputs.namespace }}
+    steps:
+      - name: Set namespace
+        id: meta
+        shell: bash
+        run: |
+          echo "namespace=${{ github.event.inputs.environment }}" >> "$GITHUB_OUTPUT"
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ env.IAM_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Set up kubectl
+        uses: azure/setup-kubectl@v4
+
+      - name: Set up Helm
+        uses: azure/setup-helm@v4
+
+      - name: Update kubeconfig
+        run: aws eks update-kubeconfig --region "$AWS_REGION" --name "$EKS_CLUSTER"
+
+      - name: Rollback Helm release
+        env:
+          NAMESPACE: ${{ steps.meta.outputs.namespace }}
+          REVISION: ${{ github.event.inputs.revision }}
+        run: |
+          if [[ -n "$REVISION" ]]; then
+            helm rollback "$HELM_RELEASE" "$REVISION" -n "$NAMESPACE" --timeout 5m
+          else
+            helm rollback "$HELM_RELEASE" -n "$NAMESPACE" --timeout 5m
+          fi
+
+  Verify:
+    needs: Rollback
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: ${{ github.event.inputs.environment }}
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ env.IAM_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Set up kubectl
+        uses: azure/setup-kubectl@v4
+
+      - name: Update kubeconfig
+        run: aws eks update-kubeconfig --region "$AWS_REGION" --name "$EKS_CLUSTER"
+
+      - name: Verify rollout
+        env:
+          NAMESPACE: ${{ needs.Rollback.outputs.namespace }}
+        run: |
+          kubectl rollout status deployment/e3-diagnostic-software \
+            --namespace "$NAMESPACE" \
+            --timeout=10m
+          kubectl get pods,service,ingress -o wide --namespace "$NAMESPACE" -l app=e3-diagnostic-software
+          helm history "$HELM_RELEASE" --namespace "$NAMESPACE" --max 10
+
+      - name: Verify /api/v1/health
+        env:
+          NAMESPACE: ${{ needs.Rollback.outputs.namespace }}
+        run: |
+          HOST="$(kubectl get ingress -n "$NAMESPACE" -l app=e3-diagnostic-software \
+            -o jsonpath='{.items[0].spec.rules[0].host}')"
+          if [[ -z "$HOST" ]]; then
+            echo "No ingress host found"
+            exit 1
+          fi
+          URL="https://${HOST}/api/v1/health"
+          echo "Checking $URL"
+          curl --fail --silent --show-error --retry 8 --retry-delay 10 --retry-all-errors "$URL"
+          echo

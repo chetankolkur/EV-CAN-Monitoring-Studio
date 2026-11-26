@@ -1,0 +1,704 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>E3 ELECTRIC.AI | Secure Login</title>
+
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Google+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            min-height: 100vh;
+            background: #080b10;
+            color: #ffffff;
+            font-family: "Google Sans", Arial, sans-serif;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 28px;
+        }
+
+        .login-layout {
+            width: 100%;
+            max-width: 1240px;
+            min-height: 710px;
+            display: grid;
+            grid-template-columns: 1.25fr 0.85fr;
+            background: #111720;
+            border: 1px solid #26313d;
+            border-radius: 20px;
+            overflow: hidden;
+            box-shadow: 0 30px 90px rgba(0, 0, 0, 0.4);
+        }
+
+        .vehicle-panel {
+            position: relative;
+            min-height: 710px;
+            overflow: hidden;
+            isolation: isolate;
+            background: #040507;
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+            padding: 42px;
+            border-right: 1px solid #27313c;
+        }
+
+        .vehicle-panel::before {
+            content: "";
+            position: absolute;
+            top: 78px;
+            left: 16px;
+            right: 16px;
+            bottom: 168px;
+            background-image: url("/static/TRiON C1x Red Halo Studio Render.png");
+            background-size: contain;
+            background-position: center center;
+            background-repeat: no-repeat;
+            z-index: -1;
+        }
+
+        .vehicle-panel::after {
+            content: "";
+            position: absolute;
+            inset: 0;
+            background: linear-gradient(
+                to bottom,
+                rgba(4, 5, 7, 0.46) 0%,
+                transparent 18%,
+                transparent 70%,
+                rgba(4, 5, 7, 0.86) 100%
+            );
+            pointer-events: none;
+            z-index: 0;
+        }
+
+        .brand {
+            position: relative;
+            z-index: 2;
+            display: flex;
+            align-items: center;
+            justify-content: flex-start;
+            width: 100%;
+            min-height: 65px;
+        }
+
+        .brand-logo {
+            display: block;
+            width: 100%;
+            max-width: 320px;
+            max-height: 70px;
+            height: auto;
+            object-fit: contain;
+            object-position: left center;
+            transform: translateY(-10px);
+        }
+
+        .vehicle-caption {
+            position: relative;
+            z-index: 2;
+            max-width: 500px;
+        }
+
+        .vehicle-caption h1 {
+            font-size: clamp(32px, 3.5vw, 44px);
+            line-height: 1.13;
+            font-weight: 700;
+            letter-spacing: -1.2px;
+            color: #f5f7fa;
+            margin-bottom: 16px;
+            max-width: 480px;
+        }
+
+        .vehicle-caption p {
+            color: #a6b1bd;
+            font-size: 14px;
+            line-height: 1.8;
+            max-width: 430px;
+            letter-spacing: 0.1px;
+        }
+
+        .login-panel {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 55px 48px;
+            background: #101720;
+        }
+
+        .login-content {
+            width: 100%;
+            max-width: 390px;
+        }
+
+        .eyebrow {
+            color: #ed5551;
+            text-transform: uppercase;
+            font-size: 11px;
+            font-weight: 700;
+            letter-spacing: 2px;
+            margin-bottom: 19px;
+        }
+
+        .login-content h2 {
+            font-size: 31px;
+            font-weight: 700;
+            color: #f4f6f9;
+            margin-bottom: 11px;
+            letter-spacing: -0.9px;
+        }
+
+        .subtitle {
+            color: #99a6b5;
+            font-size: 14px;
+            line-height: 1.75;
+            margin-bottom: 36px;
+        }
+
+        .form-group {
+            margin-bottom: 23px;
+        }
+
+        label {
+            display: block;
+            font-size: 13px;
+            font-weight: 500;
+            color: #d5dce5;
+            margin-bottom: 10px;
+        }
+
+        .form-group input {
+            width: 100%;
+            height: 51px;
+            border: 1px solid #303d4b;
+            border-radius: 7px;
+            background: #171f29;
+            color: #f5f7fa;
+            padding: 0 15px;
+            font-size: 14px;
+            outline: none;
+            font-family: inherit;
+            transition:
+                border-color 0.2s ease,
+                background 0.2s ease,
+                box-shadow 0.2s ease;
+        }
+
+        .form-group input:hover {
+            border-color: #465362;
+        }
+
+        .form-group input:focus {
+            background: #19232e;
+            border-color: #e34844;
+            box-shadow: 0 0 0 3px rgba(229, 57, 53, 0.10);
+        }
+
+        .employee-id-pill {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            min-width: 0;
+            margin: -12px 0 25px;
+            padding: 9px 11px;
+            border: 1px solid #303d4b;
+            border-radius: 7px;
+            background: #171f29;
+            color: #aab6c4;
+            font-size: 12px;
+        }
+
+        .employee-id-pill strong {
+            overflow: hidden;
+            color: #f5f7fa;
+            font-weight: 600;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .employee-id-pill .text-link {
+            margin-left: auto;
+            flex-shrink: 0;
+        }
+
+        .otp-digits {
+            display: grid;
+            grid-template-columns: repeat(6, minmax(0, 1fr));
+            gap: 8px;
+        }
+
+        .form-group .otp-digit {
+            height: 51px;
+            min-width: 0;
+            padding: 0;
+            text-align: center;
+            font-size: 20px;
+            font-weight: 600;
+        }
+
+        .form-group .otp-digit:focus {
+            background: #19232e;
+            border-color: #e34844;
+            box-shadow: 0 0 0 3px rgba(229, 57, 53, 0.10);
+        }
+
+        .otp-options {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 10px;
+            margin: 6px 0 29px;
+            font-size: 12px;
+        }
+
+        .text-link {
+            padding: 0;
+            background: none;
+            border: none;
+            color: #ed5551;
+            text-decoration: none;
+            font-size: inherit;
+            font-family: inherit;
+            cursor: pointer;
+            transition: color 0.2s ease;
+        }
+
+        .text-link:disabled {
+            color: #8290a0;
+            cursor: not-allowed;
+            text-decoration: none;
+        }
+
+        .text-link:hover {
+            color: #ff7772;
+            text-decoration: underline;
+        }
+
+        .signin-button {
+            width: 100%;
+            min-height: 51px;
+            padding: 0 14px;
+            border: 1px solid #e34844;
+            border-radius: 7px;
+            background: #d93632;
+            color: #ffffff;
+            font-size: 14px;
+            font-weight: 700;
+            font-family: inherit;
+            cursor: pointer;
+            transition:
+                background 0.2s ease,
+                border-color 0.2s ease,
+                transform 0.2s ease;
+        }
+
+        .signin-button:hover {
+            background: #e34844;
+            border-color: #f05b56;
+        }
+
+        .signin-button:active {
+            transform: scale(0.99);
+        }
+
+        .message {
+            display: none;
+            margin-top: 17px;
+            padding: 13px;
+            border: 1px solid #72503b;
+            border-radius: 7px;
+            background: #29221e;
+            color: #ffd6b1;
+            font-size: 12px;
+            line-height: 1.6;
+        }
+
+        .footer {
+            margin-top: 40px;
+            padding-top: 21px;
+            border-top: 1px solid #293541;
+            color: #8290a0;
+            font-size: 11px;
+            line-height: 1.9;
+            text-align: center;
+        }
+
+        @media (max-width: 800px) {
+            body {
+                padding: 14px;
+            }
+
+            .login-layout {
+                grid-template-columns: 1fr;
+            }
+
+            .vehicle-panel {
+                min-height: 440px;
+                padding: 27px;
+                border-right: none;
+            }
+
+            .vehicle-caption h1 {
+                font-size: 32px;
+            }
+
+            .vehicle-caption p {
+                font-size: 13px;
+            }
+
+            .login-panel {
+                padding: 42px 25px;
+            }
+        }
+
+        @media (max-width: 420px) {
+            .vehicle-panel {
+                min-height: 390px;
+            }
+
+            .vehicle-caption h1 {
+                font-size: 28px;
+            }
+
+            .login-content h2 {
+                font-size: 27px;
+            }
+
+            .otp-options,
+            .employee-id-pill {
+                font-size: 11px;
+            }
+        }
+    </style>
+</head>
+
+<body>
+    <main class="login-layout">
+        <section class="vehicle-panel">
+            <div class="brand">
+                <img
+                    src="/static/e3-electric-ai-logo.png"
+                    alt="E3 ELECTRIC.AI"
+                    class="brand-logo"
+                >
+            </div>
+
+            <div class="vehicle-caption">
+                <h1>Intelligence Behind Every Journey.</h1>
+                <p>
+                    Advanced EV telemetry, real-time CAN monitoring,
+                    and intelligent vehicle diagnostics — all in one platform.
+                </p>
+            </div>
+        </section>
+
+        <section class="login-panel">
+            <div class="login-content">
+                <div class="eyebrow">E3 Electric.AI Platform</div>
+
+                <div class="step" id="employeeStep">
+                    <h2>Welcome back</h2>
+                    <p class="subtitle">
+                        Enter your employee ID to receive a one-time verification code.
+                    </p>
+
+                    <form id="employeeForm">
+                        <div class="form-group">
+                            <label for="employeeId">Employee ID</label>
+                            <input
+                                type="text"
+                                id="employeeId"
+                                name="employeeId"
+                                placeholder="Enter your employee ID"
+                                autocomplete="username"
+                                required
+                            >
+                        </div>
+
+                        <button type="submit" class="signin-button">Send OTP</button>
+                    </form>
+                </div>
+
+                <div class="step" id="otpStep" hidden>
+                    <h2>Verify your identity</h2>
+                    <p class="subtitle">
+                        Enter the 6-digit code sent to your registered contact.
+                    </p>
+
+                    <div class="employee-id-pill">
+                        <span>Employee ID</span>
+                        <strong id="employeeIdValue"></strong>
+                        <button type="button" class="text-link" id="changeId">Change ID</button>
+                    </div>
+
+                    <form id="otpForm">
+                        <div class="form-group">
+                            <label for="otpDigit1">6-digit OTP</label>
+                            <div class="otp-digits" role="group" aria-label="6-digit OTP" aria-describedby="otpMessage">
+                                <input class="otp-digit" type="text" id="otpDigit1" name="otpDigit1" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]" maxlength="1" aria-label="OTP digit 1 of 6" required>
+                                <input class="otp-digit" type="text" id="otpDigit2" name="otpDigit2" inputmode="numeric" autocomplete="off" pattern="[0-9]" maxlength="1" aria-label="OTP digit 2 of 6" required>
+                                <input class="otp-digit" type="text" id="otpDigit3" name="otpDigit3" inputmode="numeric" autocomplete="off" pattern="[0-9]" maxlength="1" aria-label="OTP digit 3 of 6" required>
+                                <input class="otp-digit" type="text" id="otpDigit4" name="otpDigit4" inputmode="numeric" autocomplete="off" pattern="[0-9]" maxlength="1" aria-label="OTP digit 4 of 6" required>
+                                <input class="otp-digit" type="text" id="otpDigit5" name="otpDigit5" inputmode="numeric" autocomplete="off" pattern="[0-9]" maxlength="1" aria-label="OTP digit 5 of 6" required>
+                                <input class="otp-digit" type="text" id="otpDigit6" name="otpDigit6" inputmode="numeric" autocomplete="off" pattern="[0-9]" maxlength="1" aria-label="OTP digit 6 of 6" required>
+                            </div>
+                        </div>
+
+                        <div class="otp-options">
+                            <button type="button" class="text-link" id="resendOtp" disabled>
+                                Resend OTP (30s)
+                            </button>
+                        </div>
+
+                        <button type="submit" class="signin-button">
+                            Verify &amp; Connect to Device
+                        </button>
+                    </form>
+                </div>
+
+                <div class="message" id="otpMessage" role="status" aria-live="polite"></div>
+
+                <div class="footer">
+                    E3 ELECTRIC.AI<br>
+                    EV CAN Monitoring Studio<br>
+                    Secure Vehicle Intelligence Platform
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <script>
+        const employeeStep = document.getElementById("employeeStep");
+        const otpStep = document.getElementById("otpStep");
+        const employeeForm = document.getElementById("employeeForm");
+        const employeeIdInput = document.getElementById("employeeId");
+        const employeeIdValue = document.getElementById("employeeIdValue");
+        const otpForm = document.getElementById("otpForm");
+        const otpInputs = Array.from(document.querySelectorAll(".otp-digit"));
+        const otpMessage = document.getElementById("otpMessage");
+        const resendOtpButton = document.getElementById("resendOtp");
+        let resendSeconds = 0;
+        let resendTimerId = null;
+        let otpResendLocked = false;
+
+        function updateResendButton() {
+            resendOtpButton.hidden = otpResendLocked;
+            resendOtpButton.disabled = otpResendLocked || resendSeconds > 0;
+            resendOtpButton.textContent = resendSeconds > 0
+                ? `Resend OTP (${resendSeconds}s)`
+                : "Resend OTP";
+        }
+
+        function showOtpDeliveryMessage(data) {
+            if (resendTimerId !== null) {
+                window.clearInterval(resendTimerId);
+                resendTimerId = null;
+            }
+            resendSeconds = 0;
+            otpResendLocked = data.reused === true;
+            updateResendButton();
+
+            otpMessage.textContent = otpResendLocked
+                ? `Your existing OTP sent to ${data.maskedEmail} is still active for 8 hours (valid until ${data.expiresAtIst}). Please enter the latest verification code from your inbox.`
+                : `Verification code sent to ${data.maskedEmail}. This code remains valid for 8 hours (until ${data.expiresAtIst}).`;
+            otpMessage.style.display = "block";
+
+            if (!otpResendLocked) {
+                startResendCountdown();
+            }
+        }
+
+        function startResendCountdown() {
+            if (resendTimerId !== null) {
+                window.clearInterval(resendTimerId);
+            }
+
+            resendSeconds = 30;
+            updateResendButton();
+            resendTimerId = window.setInterval(() => {
+                resendSeconds -= 1;
+
+                if (resendSeconds <= 0) {
+                    resendSeconds = 0;
+                    window.clearInterval(resendTimerId);
+                    resendTimerId = null;
+                }
+
+                updateResendButton();
+            }, 1000);
+        }
+
+        employeeForm.addEventListener("submit", async (event) => {
+            event.preventDefault();
+
+            const employeeId = employeeIdInput.value.trim();
+            if (!employeeId) {
+                employeeIdInput.setCustomValidity("Enter your employee ID.");
+                employeeIdInput.reportValidity();
+                return;
+            }
+
+            employeeIdInput.setCustomValidity("");
+            employeeIdInput.value = employeeId;
+            employeeIdValue.textContent = employeeId;
+
+            const sendButton = employeeForm.querySelector('button[type="submit"]');
+            sendButton.disabled = true;
+
+            try {
+                const data = await postAuthJson("/api/auth/send-otp", {
+                    employeeId,
+                });
+                employeeStep.hidden = true;
+                otpStep.hidden = false;
+                otpInputs.forEach((input) => {
+                    input.value = "";
+                });
+                showOtpDeliveryMessage(data);
+                otpInputs[0].focus();
+            } catch (error) {
+                showOtpMessage(error.message);
+            } finally {
+                sendButton.disabled = false;
+            }
+        });
+
+        resendOtpButton.addEventListener("click", async () => {
+            resendOtpButton.disabled = true;
+            try {
+                const data = await postAuthJson("/api/auth/send-otp", {
+                    employeeId: employeeIdInput.value.trim(),
+                });
+                showOtpDeliveryMessage(data);
+                otpInputs.forEach((input) => {
+                    input.value = "";
+                });
+                otpInputs[0].focus();
+            } catch (error) {
+                showOtpMessage(error.message);
+                updateResendButton();
+            }
+        });
+
+        document.getElementById("changeId").addEventListener("click", () => {
+            employeeStep.hidden = false;
+            otpStep.hidden = true;
+            otpInputs.forEach((input) => {
+                input.value = "";
+            });
+
+            if (resendTimerId !== null) {
+                window.clearInterval(resendTimerId);
+                resendTimerId = null;
+            }
+            resendSeconds = 0;
+            otpResendLocked = false;
+            updateResendButton();
+
+            otpMessage.textContent = "";
+            otpMessage.style.display = "none";
+            employeeIdInput.focus();
+        });
+
+        otpInputs.forEach((input, index) => {
+            input.addEventListener("input", () => {
+                input.value = input.value.replace(/[^0-9]/g, "").slice(-1);
+                if (input.value && index < otpInputs.length - 1) {
+                    otpInputs[index + 1].focus();
+                }
+            });
+
+            input.addEventListener("keydown", (event) => {
+                if (event.key === "Backspace" && !input.value && index > 0) {
+                    otpInputs[index - 1].value = "";
+                    otpInputs[index - 1].focus();
+                }
+            });
+
+            input.addEventListener("paste", (event) => {
+                const pastedDigits = event.clipboardData
+                    .getData("text")
+                    .replace(/[^0-9]/g, "")
+                    .slice(0, otpInputs.length);
+
+                if (!pastedDigits) {
+                    return;
+                }
+
+                event.preventDefault();
+                otpInputs.forEach((digitInput, digitIndex) => {
+                    digitInput.value = pastedDigits[digitIndex] || "";
+                });
+                otpInputs[Math.min(pastedDigits.length, otpInputs.length - 1)].focus();
+            });
+        });
+
+        otpForm.addEventListener("submit", async (event) => {
+            event.preventDefault();
+
+            const otp = otpInputs.map((input) => input.value).join("");
+            if (!/^[0-9]{6}$/.test(otp)) {
+                showOtpMessage("Enter the 6-digit OTP.");
+                otpInputs.find((input) => !input.value)?.focus();
+                return;
+            }
+
+            const verifyButton = otpForm.querySelector('button[type="submit"]');
+            verifyButton.disabled = true;
+            try {
+                // TODO: Replace the local verification response when cloud auth is enabled.
+                const result = await postAuthJson("/api/auth/verify-otp", {
+                    employeeId: employeeIdInput.value.trim(),
+                    otp,
+                });
+                localStorage.setItem("e3EmployeeId", result.employee_id);
+                localStorage.setItem(
+                    "e3SessionExpiresAt",
+                    String(Date.now() + 8 * 60 * 60 * 1000)
+                );
+                window.location.href = "/vehicle-verification";
+            } catch (error) {
+                showOtpMessage(error.message);
+            } finally {
+                verifyButton.disabled = false;
+            }
+        });
+
+        employeeIdInput.addEventListener("input", () => {
+            employeeIdInput.setCustomValidity("");
+        });
+
+        async function postAuthJson(url, payload) {
+            const response = await fetch(url, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(payload),
+            });
+            let result;
+            try {
+                result = await response.json();
+            } catch {
+                throw new Error("The server returned an invalid response.");
+            }
+            if (!response.ok) {
+                throw new Error(result.detail || `Request failed (${response.status}).`);
+            }
+            return result;
+        }
+
+        function showOtpMessage(message) {
+            otpMessage.textContent = message;
+            otpMessage.style.display = "block";
+        }
+    </script>
+</body>
+</html>

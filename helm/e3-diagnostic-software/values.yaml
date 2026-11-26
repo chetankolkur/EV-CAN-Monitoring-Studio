@@ -1,0 +1,111 @@
+replicaCount: 1
+
+image:
+  repository: ""
+  tag: ""
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+
+serviceAccount:
+  create: true
+  name: e3-diagnostic-software
+  annotations: {}
+
+podAnnotations: {}
+podLabels: {}
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 101
+  runAsGroup: 101
+  fsGroup: 101
+
+containerSecurityContext:
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop:
+      - ALL
+  readOnlyRootFilesystem: false
+
+# Non-secret config (ConfigMap). Sensitive keys → AWS Secrets Manager (secret.name).
+config:
+  appPort: "8000"
+  port: "8000"
+  awsRegion: ap-south-1
+  documentsApiUrl: "https://ke76ricmk3.execute-api.ap-south-1.amazonaws.com/prod/documents"
+  softwareVersionsApiUrl: "https://ke76ricmk3.execute-api.ap-south-1.amazonaws.com/prod/software-versions"
+  appVersion: "0.1.0"
+
+# Optional K8s Secret override. Prefer AWS Secrets Manager via Pod Identity.
+existingEnvSecret: ""
+
+# AWS Secrets Manager secret id (JSON with SOFTWARE_VERSIONS_API_KEY, etc.)
+secret:
+  name: ""
+
+service:
+  type: ClusterIP
+  port: 80
+  targetPort: 8000
+
+ingress:
+  enabled: false
+  className: alb
+  annotations:
+    alb.ingress.kubernetes.io/scheme: internet-facing
+    alb.ingress.kubernetes.io/target-type: ip
+    alb.ingress.kubernetes.io/listen-ports: '[{"HTTP":80},{"HTTPS":443}]'
+    alb.ingress.kubernetes.io/healthcheck-path: /api/v1/health
+    alb.ingress.kubernetes.io/healthcheck-port: traffic-port
+    alb.ingress.kubernetes.io/success-codes: "200"
+  hosts:
+    - host: e3-diagnostic-software.e3techworld.com
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+
+strategy:
+  type: RollingUpdate
+  rollingUpdate:
+    maxUnavailable: 0
+    maxSurge: 1
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 128Mi
+  limits:
+    cpu: "250m"
+    memory: 256Mi
+
+probes:
+  startup:
+    path: /api/v1/health
+    periodSeconds: 5
+    timeoutSeconds: 3
+    failureThreshold: 12
+  readiness:
+    path: /api/v1/health
+    initialDelaySeconds: 5
+    periodSeconds: 10
+    timeoutSeconds: 3
+    failureThreshold: 3
+  liveness:
+    path: /api/v1/health
+    initialDelaySeconds: 20
+    periodSeconds: 20
+    timeoutSeconds: 3
+    failureThreshold: 3
+
+autoscaling:
+  enabled: true
+  minReplicas: 1
+  maxReplicas: 5
+  targetCPUUtilizationPercentage: 70
+  scaleDownStabilizationSeconds: 120
+
+nodeSelector: {}
+tolerations: []
+affinity: {}

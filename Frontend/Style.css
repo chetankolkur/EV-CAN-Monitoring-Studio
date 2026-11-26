@@ -328,9 +328,29 @@ hr.soft{border:none;border-top:1px solid var(--border-soft);margin:22px 0;}
 .vehicle-chip .vc-field{min-width:0;}
 .vehicle-chip .vc-value{max-width:none;overflow:visible;text-overflow:clip;white-space:nowrap;}
 .vehicle-chip .bc-dot{flex:0 0 auto;}
+.header-vehicle-info{
+  display:flex;align-items:center;min-width:0;flex:0 1 auto;
+  padding:8px 14px;background:var(--surface);border:1px solid var(--border-soft);
+  border-radius:10px;
+}
+.header-vehicle-segment{
+  display:flex;flex-direction:column;gap:1px;min-width:0;
+  padding:0 10px;
+}
+.header-vehicle-segment:first-child{padding-left:0;}
+.header-vehicle-segment:last-child{padding-right:0;}
+.header-vehicle-label{
+  color:var(--text-faint);font-size:10px;line-height:1.2;
+  font-weight:600;letter-spacing:.07em;
+}
+.header-vehicle-value{
+  display:block;max-width:130px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+  color:var(--text);font:600 12px/1.35 "IBM Plex Mono",ui-monospace,monospace;
+}
+.header-vehicle-divider{width:1px;height:26px;flex:0 0 1px;background:var(--border);}
 .header-actions{
-  display:flex;align-items:center;gap:11px;
-  flex:0 0 auto;
+  display:flex;align-items:center;gap:12px;min-width:0;
+  flex:0 1 auto;flex-wrap:wrap;justify-content:flex-end;
 }
 .theme-toggle{
   width:44px;height:44px;border-radius:12px;
@@ -349,6 +369,42 @@ hr.soft{border:none;border-top:1px solid var(--border-soft);margin:22px 0;}
   width:21px;height:21px;fill:none;stroke:currentColor;
   stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round;
 }
+.profile-menu{position:relative;display:flex;align-items:center;flex:0 0 auto;}
+.profile-menu-btn{
+  width:38px;height:38px;border-radius:50%;
+  display:inline-flex;align-items:center;justify-content:center;
+  border:1px solid var(--border);background:var(--surface-raised);color:var(--text);
+  padding:0;flex:0 0 38px;
+  transition:background .16s ease,border-color .16s ease,color .16s ease,transform .12s ease,box-shadow .16s ease;
+}
+.profile-menu-btn:hover{
+  background:var(--surface-hover);border-color:var(--accent);
+  box-shadow:0 4px 14px rgba(0,0,0,.12);
+}
+.profile-menu-btn:active{transform:scale(.94);}
+.profile-menu-btn:focus-visible{outline:2px solid var(--accent);outline-offset:2px;}
+.profile-menu-btn svg{
+  width:20px;height:20px;fill:none;stroke:currentColor;
+  stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round;
+}
+.profile-dropdown{
+  position:absolute;right:0;top:calc(100% + 8px);z-index:1000;
+  width:max-content;min-width:230px;max-width:min(320px,calc(100vw - 24px));
+  padding:15px;background:var(--surface);color:var(--text);
+  border:1px solid var(--border);border-radius:10px;
+  box-shadow:0 12px 32px rgba(0,0,0,.3);
+}
+.profile-dropdown[hidden]{display:none;}
+.profile-caption{font-size:10px;font-weight:700;letter-spacing:.1em;color:var(--text-faint);}
+.profile-employee-label{margin-top:11px;font-size:11px;color:var(--text-dim);}
+.profile-employee-id{margin-top:2px;font-size:14px;font-weight:700;overflow-wrap:anywhere;}
+.profile-divider{height:1px;margin:14px 0 9px;background:var(--border-soft);}
+.profile-logout-btn{
+  width:100%;padding:8px 9px;border:1px solid transparent;border-radius:6px;
+  background:transparent;color:var(--bad);text-align:left;font-weight:600;
+  transition:background .16s ease,border-color .16s ease;
+}
+.profile-logout-btn:hover{background:var(--bad-soft);border-color:var(--bad);}
 .content{min-height:0;}
 .screen{width:100%;}
 .setup-panel{padding:18px;margin-bottom:12px;}
@@ -651,7 +707,8 @@ html[data-theme="light"] ::-webkit-scrollbar-thumb{background:#cbd5e1;}
   .shell{height:auto;min-height:100vh;min-height:100dvh;}
   .sidebar{width:190px;flex-basis:190px;}
   .content{padding:20px 18px 40px;}
-  .topbar{padding:0 18px;}
+  .topbar{height:auto;min-height:60px;flex:0 0 auto;flex-wrap:wrap;gap:8px;padding:8px 18px;}
+  .header-actions{flex:1 1 100%;}
   .section-head{align-items:flex-start;gap:12px;flex-wrap:wrap;}
   .signal-filter-bar input[type="search"]{width:100%;}
   .signal-chart-canvas{height:300px;}
@@ -671,6 +728,9 @@ html[data-theme="light"] ::-webkit-scrollbar-thumb{background:#cbd5e1;}
   .main{min-height:calc(100vh - 110px);min-height:calc(100dvh - 110px);}
   .topbar{height:auto;min-height:60px;flex-wrap:wrap;gap:8px;padding:12px;}
   .header-actions{gap:8px;align-self:flex-end;}
+  .header-vehicle-info{flex:1 1 100%;margin-right:0;}
+  .header-vehicle-segment{flex:1 1 0;}
+  .header-vehicle-value{max-width:100%;}
   .theme-toggle{width:44px;height:44px;}
   .vehicle-chip{max-width:100%;padding:6px 8px;gap:8px;}
   .vehicle-chip .vc-value{max-width:none;}

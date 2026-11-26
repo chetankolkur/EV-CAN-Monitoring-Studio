@@ -2,11 +2,18 @@ import json
 import logging
 import os
 import re
+import secrets
+import smtplib
 import time
+from datetime import datetime, timedelta
+from email.message import EmailMessage
 from pathlib import Path
 from urllib.parse import urlsplit
+from zoneinfo import ZoneInfo
 
+import boto3
 from dotenv import load_dotenv
+from botocore.exceptions import BotoCoreError, ClientError
 
 load_dotenv()
 
@@ -44,13 +51,6 @@ def load_secrets_from_aws() -> None:
     region = os.environ.get("AWS_REGION", "ap-south-1")
     max_attempts = 6
     delay_s = 5
-
-    try:
-        import boto3
-        from botocore.exceptions import BotoCoreError, ClientError
-    except ImportError:
-        logger.error("boto3 is required to load Secrets Manager secrets")
-        return
 
     client = boto3.client("secretsmanager", region_name=region)
     last_error = None
@@ -103,6 +103,32 @@ app = FastAPI(title="EV CAN Browser Monitor")
 
 BASE_DIR = Path(__file__).resolve().parent
 FRONTEND_DIR = BASE_DIR / "Frontend"
+DYNAMODB_REGION = os.getenv("AWS_REGION", "ap-south-1")
+EMPLOYEE_TABLE_NAME = os.getenv("DYNAMODB_EMPLOYEE_TABLE", "diagnostic_software")
+dynamodb = boto3.resource(
+    "dynamodb",
+    region_name=DYNAMODB_REGION,
+    aws_access_key_id=os.getenv("AWS_ACCESS_KEY_ID"),
+    aws_secret_access_key=os.getenv("AWS_SECRET_ACCESS_KEY"),
+)
+employee_table = dynamodb.Table(EMPLOYEE_TABLE_NAME)
+otp_table = dynamodb.Table(os.getenv("DYNAMODB_OTP_TABLE", "diagnostic_login_otp"))
+try:
+    OTP_PK = otp_table.key_schema[0]["AttributeName"]
+except (
+    BotoCoreError,
+    ClientError,
+    AttributeError,
+    IndexError,
+    KeyError,
+    TypeError,
+) as error:
+    logger.warning(
+        "Could not load OTP table key schema; defaulting to employee_id: %s",
+        error,
+    )
+    OTP_PK = "employee_id"
+INDIA_TIMEZONE = ZoneInfo("Asia/Kolkata")
 DOCUMENTS_API_URL = os.environ.get(
     "DOCUMENTS_API_URL",
     "https://ke76ricmk3.execute-api.ap-south-1.amazonaws.com/prod/documents",
@@ -119,6 +145,270 @@ DBC_ECU_BY_FILENAME = {
 }
 
 app.mount("/static", StaticFiles(directory=str(FRONTEND_DIR)), name="static")
+
+
+def _employee_contact(item, *fields):
+    for field in fields:
+        value = item.get(field)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
+
+
+def _mask_email(email):
+    if not email:
+        return ""
+
+    local, separator, domain = email.partition("@")
+    if not separator:
+        return "***"
+
+    domain_name, dot, suffix = domain.partition(".")
+    masked_domain = f"{domain_name[:1]}***"
+    if dot:
+        masked_domain = f"{masked_domain}.{suffix}"
+    return f"{local[:1]}***@{masked_domain}"
+
+
+def _mask_phone(phone):
+    if not phone:
+        return ""
+
+    digits = re.sub(r"\D", "", phone)
+    if not digits:
+        return ""
+    return f"***{digits[-4:]}"
+
+
+def send_otp_email(to_email: str, employee_name: str, otp_code: str) -> None:
+    smtp_host = os.getenv("SMTP_HOST", "email-smtp.ap-south-1.amazonaws.com")
+    smtp_port = int(os.getenv("SMTP_PORT", "587"))
+    smtp_username = os.getenv("SMTP_USERNAME")
+    smtp_password = os.getenv("SMTP_PASSWORD")
+    from_email = os.getenv("SMTP_FROM_EMAIL")
+    if not smtp_username or not smtp_password or not from_email:
+        raise ValueError(
+            "SMTP_USERNAME, SMTP_PASSWORD, and SMTP_FROM_EMAIL must be configured."
+        )
+
+    message = EmailMessage()
+    message["Subject"] = "Your E3 ELECTRIC.AI verification code"
+    message["From"] = from_email
+    message["To"] = to_email
+    greeting = f"Hello {employee_name}," if employee_name else "Hello,"
+    message.set_content(
+        f"{greeting}\n\nYour verification code is {otp_code}. "
+        "Please use it to complete your sign-in."
+    )
+
+    with smtplib.SMTP(smtp_host, smtp_port) as server:
+        server.starttls()
+        server.login(smtp_username, smtp_password)
+        server.send_message(message)
+
+
+def _get_employee_item(emp_id):
+    try:
+        return employee_table.get_item(Key={"employee_id": emp_id}).get("Item")
+    except (BotoCoreError, ClientError) as error:
+        logger.exception("DynamoDB employee lookup failed")
+        raise HTTPException(
+            status_code=503,
+            detail="Employee directory is temporarily unavailable.",
+        ) from error
+
+
+@app.post("/api/auth/send-otp")
+def send_otp(payload: dict):
+    emp_id = payload.get("employeeId")
+    if not isinstance(emp_id, str) or not emp_id.strip():
+        raise HTTPException(status_code=400, detail="A non-empty employeeId is required.")
+    emp_id = emp_id.strip()
+
+    employee = _get_employee_item(emp_id)
+    if employee is None:
+        raise HTTPException(status_code=404, detail="Employee ID not found.")
+
+    recipient_email = employee.get("email")
+    if not isinstance(recipient_email, str) or not recipient_email.strip():
+        raise HTTPException(
+            status_code=422,
+            detail="No email address is associated with this employee.",
+        )
+    recipient_email = recipient_email.strip()
+
+    try:
+        otp_item = otp_table.get_item(Key={OTP_PK: emp_id}).get("Item")
+    except (BotoCoreError, ClientError) as error:
+        logger.exception("DynamoDB OTP lookup failed")
+        raise HTTPException(
+            status_code=503,
+            detail="Could not retrieve the verification code. Please try again.",
+        ) from error
+
+    now_epoch = int(time.time())
+    reused = False
+    if otp_item is not None:
+        try:
+            expireat = int(
+                otp_item.get("expireat") or otp_item.get("ttl_epoch") or 0
+            )
+            is_active = now_epoch < expireat
+        except (TypeError, ValueError) as error:
+            logger.exception("DynamoDB OTP record is invalid")
+            raise HTTPException(
+                status_code=503,
+                detail="The stored verification code is invalid. Please try again.",
+            ) from error
+
+        if is_active:
+            otp_code = otp_item.get("otp")
+            if not isinstance(otp_code, str):
+                raise HTTPException(
+                    status_code=503,
+                    detail="The stored verification code is invalid. Please try again.",
+                )
+            reused = True
+        else:
+            try:
+                otp_table.delete_item(Key={OTP_PK: emp_id})
+            except (BotoCoreError, ClientError) as error:
+                logger.exception("Expired DynamoDB OTP deletion failed")
+                raise HTTPException(
+                    status_code=503,
+                    detail="Could not refresh the verification code. Please try again.",
+                ) from error
+            otp_item = None
+
+    if reused:
+        return {
+            "ok": True,
+            "reused": True,
+            "name": employee.get("name"),
+            "maskedEmail": _mask_email(recipient_email),
+            "expiresAtIst": otp_item.get("expires_at_ist"),
+        }
+
+    if otp_item is None:
+        otp_code = f"{secrets.randbelow(1_000_000):06d}"
+        now_ist = datetime.now(INDIA_TIMEZONE)
+        expiry_ist = now_ist + timedelta(hours=8)
+        expireat = int(expiry_ist.timestamp())
+        expires_at_ist = f"{expiry_ist.strftime('%Y-%m-%d %H:%M:%S')} IST"
+        otp_item = {
+            "employee_id": emp_id,
+            "email": recipient_email,
+            "otp": otp_code,
+            "created_at_ist": f"{now_ist.strftime('%Y-%m-%d %H:%M:%S')} IST",
+            "expires_at_ist": expires_at_ist,
+            "expireat": expireat,
+            "status": "PENDING",
+        }
+        if OTP_PK != "employee_id":
+            otp_item[OTP_PK] = emp_id
+        try:
+            otp_table.put_item(Item=otp_item)
+        except (BotoCoreError, ClientError) as error:
+            logger.exception("DynamoDB OTP creation failed")
+            raise HTTPException(
+                status_code=503,
+                detail="Could not create a verification code. Please try again.",
+            ) from error
+
+    try:
+        send_otp_email(recipient_email, employee.get("name", ""), otp_code)
+    except (OSError, smtplib.SMTPException, ValueError) as error:
+        logger.exception("OTP email delivery failed")
+        raise HTTPException(
+            status_code=502,
+            detail="Could not send the verification code. Please try again.",
+        ) from error
+
+    return {
+        "ok": True,
+        "reused": False,
+        "name": employee.get("name"),
+        "maskedEmail": _mask_email(recipient_email),
+        "expiresAtIst": expires_at_ist,
+    }
+
+
+@app.post("/api/auth/verify-otp")
+def verify_otp(payload: dict):
+    emp_id = payload.get("employeeId")
+    otp_code = payload.get("otp")
+    if not isinstance(emp_id, str) or not emp_id.strip():
+        raise HTTPException(status_code=400, detail="A non-empty employeeId is required.")
+    emp_id = emp_id.strip()
+
+    try:
+        otp_item = otp_table.get_item(Key={OTP_PK: emp_id}).get("Item")
+    except (BotoCoreError, ClientError) as error:
+        logger.exception("DynamoDB OTP lookup failed during verification")
+        raise HTTPException(
+            status_code=503,
+            detail="Could not retrieve the verification code. Please try again.",
+        ) from error
+
+    if otp_item is None:
+        raise HTTPException(
+            status_code=401,
+            detail="No active OTP found. Please request a new code.",
+        )
+
+    try:
+        expireat = int(
+            otp_item.get("expireat") or otp_item.get("ttl_epoch") or 0
+        )
+    except (TypeError, ValueError) as error:
+        logger.exception("DynamoDB OTP record is invalid")
+        raise HTTPException(
+            status_code=503,
+            detail="The stored verification code is invalid. Please request a new code.",
+        ) from error
+
+    if int(time.time()) >= expireat:
+        try:
+            otp_table.delete_item(Key={OTP_PK: emp_id})
+        except (BotoCoreError, ClientError) as error:
+            logger.exception("Expired DynamoDB OTP deletion failed")
+            raise HTTPException(
+                status_code=503,
+                detail="Could not clean up the expired verification code.",
+            ) from error
+        raise HTTPException(
+            status_code=401,
+            detail="OTP expired after 8 hours. Please request a new OTP.",
+        )
+
+    if not isinstance(otp_code, str) or otp_code != otp_item.get("otp"):
+        raise HTTPException(status_code=401, detail="Invalid 6-digit OTP.")
+
+    employee = _get_employee_item(emp_id)
+    if employee is None:
+        raise HTTPException(status_code=401, detail="Employee ID not found.")
+
+    try:
+        otp_table.update_item(
+            Key={OTP_PK: emp_id},
+            UpdateExpression="SET #status = :status",
+            ExpressionAttributeNames={"#status": "status"},
+            ExpressionAttributeValues={":status": "VERIFIED"},
+        )
+    except (BotoCoreError, ClientError) as error:
+        logger.exception("DynamoDB OTP verification update failed")
+        raise HTTPException(
+            status_code=503,
+            detail="Could not verify the code. Please try again.",
+        ) from error
+
+    # TODO (Cloud Team): Add AI risk assessment & JWT
+    return {
+        "ok": True,
+        "employee_id": emp_id,
+        "name": employee.get("name"),
+    }
+
 
 def documents_api_payload(path=None):
     params = {"path": path} if path is not None else None
@@ -225,6 +515,21 @@ def load_dbc_version(path):
 @app.get("/")
 def home():
     """Dashboard that reads the CAN adapter in Chrome via WebUSB/Web Serial."""
+    return FileResponse(FRONTEND_DIR / "index.html")
+
+
+@app.get("/login")
+def login():
+    return FileResponse(FRONTEND_DIR / "login.html")
+
+
+@app.get("/vehicle-verification")
+def vehicle_verification():
+    return FileResponse(FRONTEND_DIR / "vehicle-verification.html")
+
+
+@app.get("/dashboard")
+def dashboard():
     return FileResponse(FRONTEND_DIR / "index.html")
 
 

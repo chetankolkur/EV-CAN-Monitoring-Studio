@@ -1,0 +1,6 @@
+apiVersion: v2
+name: e3-diagnostic-software
+description: E3 Diagnostic Software (FastAPI browser CAN monitor) on EKS
+type: application
+version: 0.1.0
+appVersion: "0.1.0"

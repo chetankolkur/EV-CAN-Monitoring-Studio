@@ -63,6 +63,22 @@
                     <div class="page-crumb" id="page-crumb">Live vehicle overview</div>
                 </div>
                 <div class="header-actions">
+                    <div id="headerVehicleInfo" class="header-vehicle-info" aria-label="Active vehicle details">
+                        <div class="header-vehicle-segment">
+                            <span class="header-vehicle-label">VIN</span>
+                            <span id="headerVehicleVin" class="header-vehicle-value">—</span>
+                        </div>
+                        <span class="header-vehicle-divider" aria-hidden="true"></span>
+                        <div class="header-vehicle-segment">
+                            <span class="header-vehicle-label">REG</span>
+                            <span id="headerVehicleReg" class="header-vehicle-value">—</span>
+                        </div>
+                        <span class="header-vehicle-divider" aria-hidden="true"></span>
+                        <div class="header-vehicle-segment">
+                            <span class="header-vehicle-label">PHONE</span>
+                            <span id="headerVehiclePhone" class="header-vehicle-value">—</span>
+                        </div>
+                    </div>
                     <button id="themeToggle" class="theme-toggle" type="button" aria-label="Switch to light theme" title="Switch to light theme">
                         <svg class="theme-icon theme-icon-moon" viewBox="0 0 24 24" aria-hidden="true">
                             <path d="M20.1 15.2A8.5 8.5 0 0 1 8.8 3.9a8.5 8.5 0 1 0 11.3 11.3Z"/>
@@ -71,6 +87,21 @@
                     <div class="vehicle-chip">
                         <div class="vc-field"><span class="vc-label">CAN ADAPTER</span><span class="vc-value" id="statusText">Disconnected</span></div>
                         <span id="statusDot" class="bc-dot"></span>
+                    </div>
+                    <div class="profile-menu" id="profileMenu">
+                        <button id="profileMenuBtn" class="profile-menu-btn" type="button" aria-label="Open profile menu" aria-haspopup="true" aria-expanded="false">
+                            <svg viewBox="0 0 24 24" aria-hidden="true">
+                                <circle cx="12" cy="8" r="3.25"></circle>
+                                <path d="M5.5 20a6.5 6.5 0 0 1 13 0"></path>
+                            </svg>
+                        </button>
+                        <div id="profileDropdown" class="profile-dropdown" hidden>
+                            <div class="profile-caption">SIGNED IN AS</div>
+                            <div class="profile-employee-label">Employee ID</div>
+                            <div id="profileEmployeeId" class="profile-employee-id"></div>
+                            <div class="profile-divider"></div>
+                            <button id="logoutBtn" class="profile-logout-btn" type="button">Logout</button>
+                        </div>
                     </div>
                 </div>
             </header>
@@ -143,36 +174,18 @@
 
                 <section class="screen" id="screen-ecu">
                     <div class="section">
-                        <section class="panel firmware-version-panel" aria-labelledby="firmware-version-title">
-                            <div class="section-head">
-                                <div>
-                                    <div class="section-title"><span class="bar"></span>Firmware Version Verification</div>
-                                    <div class="section-note" id="firmware-version-title">Compare the expected software version with incoming CAN data.</div>
-                                </div>
-                            </div>
-                            <form id="firmware-version-form" novalidate>
-                                <div class="field">
-                                    <label for="firmware-vin">VIN</label>
-                                    <input id="firmware-vin" name="vin" type="text" placeholder="ME9AC1011BJ693015" autocomplete="off" required>
-                                </div>
-                                <div class="field">
-                                    <label for="firmware-variant">Variant</label>
-                                    <select id="firmware-variant" name="variant">
-                                        <option value="C1">C1</option>
-                                        <option value="C1x">C1x</option>
-                                        <option value="C2">C2</option>
-                                    </select>
-                                </div>
-                                <button id="firmware-submit" class="btn primary" type="submit">Submit</button>
-                            </form>
+                        <section class="panel firmware-version-panel" aria-label="Firmware version comparison">
                             <div class="firmware-components-wrap">
-                                <table class="firmware-component-table" aria-label="Firmware version comparison by ECU component">
+                                <table class="firmware-component-table">
                                     <thead>
-                                        <tr><th>Component</th><th>Expected API Value</th><th>Live DBC Decoded CAN Value</th><th>Status</th></tr>
+                                        <tr>
+                                            <th>COMPONENT</th>
+                                            <th>EXPECTED API VALUE</th>
+                                            <th>LIVE DBC DECODED CAN VALUE</th>
+                                            <th>STATUS</th>
+                                        </tr>
                                     </thead>
-                                    <tbody id="firmware-component-rows">
-                                        <tr><td colspan="4" class="bc-empty">Submit a VIN to load expected ECU component versions.</td></tr>
-                                    </tbody>
+                                    <tbody id="firmware-component-rows"></tbody>
                                 </table>
                             </div>
                             <div class="firmware-overall">
@@ -181,6 +194,8 @@
                             </div>
                             <p id="firmware-version-error" class="firmware-version-error" role="status" hidden></p>
                         </section>
+                    </div>
+                    <div class="section">
                         <div class="section-head">
                             <div class="section-title"><span class="bar"></span>Available tests</div>
                             <div class="section-note">Click a test to expand · run one at a time</div>

@@ -3,11 +3,11 @@ import { parseDbc, filterDbcMessages, decodeMessage, encodeRandom } from "./dbc.
 import { SlcanTransport, PcanUsbTransport, SimulatorTransport } from "./transports.js";
 
 const DBC_ECUS = ["BMS", "MCU", "TCU", "MiddleWare"];
-const FIRMWARE_COMPONENTS = ["BMS", "BMSCONFIG", "CLUSTER", "MCU", "MIDDLEWARE", "TCU"];
 const DBC_SOURCE_FOR_TAB = { Cluster: "MCU" };
 const DBC_VERSIONS_URL = "/api/dbc-versions";
 const DBC_FILES_URL = "/api/dbc-files";
 const SOFTWARE_VERSIONS_URL = "/api/software-versions";
+const FIRMWARE_COMPONENTS = ["BMS", "BMSCONFIG", "CLUSTER", "MCU", "MIDDLEWARE", "TCU"];
 const RAW_ROWS = 200;
 const STALE_MS = 3000;
 const MAX_SIGNAL_HISTORY = 120;
@@ -20,6 +20,7 @@ const SIGNAL_CHART_HEIGHT = 340;
 const GRAPH_AXIS_WIDTH = 58;
 
 const $ = (id) => document.getElementById(id);
+let firmwareRequestSequence = 0;
 
 const THEME_STORAGE_KEY = "ev_can_theme";
 
@@ -96,9 +97,9 @@ const state = {
     rawDirty: false,
     recording: false,
     recordRows: [],
-    lastFrameAt: 0,
     firmwareExpectedComponents: null,
-    firmwareCurrentTcuVersion: null
+    firmwareCurrentTcuVersion: null,
+    lastFrameAt: 0
 };
 
 const initialTheme = document.documentElement.dataset.theme === "light" ? "light" : "dark";
@@ -614,6 +615,8 @@ function handleFrame(frame) {
     }
 }
 
+
+
 function normalizeFirmwareVersion(value) {
     return String(value)
         .normalize("NFKC")
@@ -895,16 +898,7 @@ function renderFirmwareVersionComparison() {
     const summary = $("firmware-overall-status");
 
     if (!components) {
-        if (rows.dataset.renderSignature === "no-api") return;
-        rows.dataset.renderSignature = "no-api";
         rows.replaceChildren();
-        const row = document.createElement("tr");
-        const cell = document.createElement("td");
-        cell.colSpan = 4;
-        cell.className = "bc-empty";
-        cell.textContent = "Submit a VIN to load expected ECU component versions.";
-        row.appendChild(cell);
-        rows.appendChild(row);
         summary.className = "pill idle";
         summary.textContent = "Not checked";
         return;
@@ -982,31 +976,31 @@ function apiErrorMessage(payload, rawBody, status) {
     return `Request failed with status ${status}.`;
 }
 
-async function submitFirmwareVersionCheck(event) {
-    event.preventDefault();
-    const vinInput = $("firmware-vin");
-    const vin = vinInput.value.trim();
+async function loadExpectedFirmwareVersions(vin, variant) {
+    const requestId = ++firmwareRequestSequence;
+    const normalizedVin = typeof vin === "string" ? vin.trim() : "";
+    const normalizedVariant = typeof variant === "string" ? variant.trim() : "";
     const error = $("firmware-version-error");
-    const button = $("firmware-submit");
-    if (!vin) {
-        vinInput.setCustomValidity("Please enter a VIN.");
-        vinInput.reportValidity();
+
+    error.hidden = true;
+
+    if (!normalizedVin || !normalizedVariant) {
+        state.firmwareExpectedComponents = null;
+        state.firmwareCurrentTcuVersion = null;
+        error.textContent = "Vehicle details are missing. Complete vehicle verification before checking firmware.";
+        error.hidden = false;
+        renderFirmwareVersionComparison();
         return;
     }
-    vinInput.setCustomValidity("");
+    if (!state.firmwareExpectedComponents) {
+        renderFirmwareVersionComparison();
+    }
 
-    state.firmwareExpectedComponents = null;
-    state.firmwareCurrentTcuVersion = null;
-    error.hidden = true;
-    button.disabled = true;
-    button.setAttribute("aria-busy", "true");
-    button.textContent = "Loading…";
-    renderFirmwareVersionComparison();
     try {
         const response = await fetch(SOFTWARE_VERSIONS_URL, {
             method: "POST",
             headers: { "Content-Type": "application/json", "Accept": "application/json" },
-            body: JSON.stringify({ vin, variant: $("firmware-variant").value })
+            body: JSON.stringify({ vin: normalizedVin, variant: normalizedVariant })
         });
         const rawBody = await response.text();
         let payload = null;
@@ -1015,6 +1009,7 @@ async function submitFirmwareVersionCheck(event) {
         } catch {
             if (response.ok) throw new Error("The software versions API returned invalid JSON.");
         }
+        if (requestId !== firmwareRequestSequence) return;
         if (!response.ok) {
             throw new Error(apiErrorMessage(payload, rawBody, response.status));
         }
@@ -1025,6 +1020,7 @@ async function submitFirmwareVersionCheck(event) {
             typeof payload.ecu.components !== "object" || Array.isArray(payload.ecu.components)) {
             throw new Error("The API response did not contain ecu.components.");
         }
+
         state.firmwareExpectedComponents = Object.fromEntries(
             FIRMWARE_COMPONENTS.map((component) => {
                 const value = payload.ecu.components[component];
@@ -1043,18 +1039,11 @@ async function submitFirmwareVersionCheck(event) {
                 : null;
         renderFirmwareVersionComparison();
     } catch (requestError) {
+        if (requestId !== firmwareRequestSequence) return;
         error.textContent = `Could not verify firmware version: ${requestError.message}`;
         error.hidden = false;
-        renderFirmwareVersionComparison();
-    } finally {
-        button.disabled = false;
-        button.removeAttribute("aria-busy");
-        button.textContent = "Submit";
     }
 }
-
-$("firmware-version-form").addEventListener("submit", submitFirmwareVersionCheck);
-$("firmware-vin").addEventListener("input", (event) => event.currentTarget.setCustomValidity(""));
 
 // ---------------------------------------------------------------- ECU tests
 const ECU_CELL_SPREAD_LIMIT_MV = 200;
@@ -2344,6 +2333,12 @@ function goScreen(id) {
     $("page-title").textContent = title[0];
     $("page-crumb").textContent = title[1];
     document.querySelector(".content").scrollTop = 0;
+    if (id === "ecu") {
+        void loadExpectedFirmwareVersions(
+            localStorage.getItem("e3VehicleVin"),
+            localStorage.getItem("e3VehicleVariant")
+        );
+    }
     if (id === "graph") renderGraphView();
 }
 
@@ -2360,3 +2355,90 @@ $("vm-toggle").addEventListener("click", () => {
 renderEcuTests();
 updateSidebarStatus("Adapter disconnected.", "idle");
 renderGraphSignalPicker(true);
+
+function initializeDashboard() {
+    if (!initializeProfileMenu()) return;
+    updateHeaderVehicleInfo();
+
+    if (localStorage.getItem("e3AutoVerifyFirmware") === "true") {
+        localStorage.removeItem("e3AutoVerifyFirmware");
+        goScreen("ecu");
+        return;
+    }
+
+    void loadExpectedFirmwareVersions(
+        localStorage.getItem("e3VehicleVin"),
+        localStorage.getItem("e3VehicleVariant")
+    );
+}
+
+function updateHeaderVehicleInfo() {
+    const vehicleDetails = [
+        ["headerVehicleVin", "e3VehicleVin"],
+        ["headerVehicleReg", "e3VehicleRegistration"],
+        ["headerVehiclePhone", "e3VehicleMobile"]
+    ];
+
+    vehicleDetails.forEach(([elementId, storageKey]) => {
+        const storedValue = localStorage.getItem(storageKey);
+        const value = storedValue ? storedValue.trim() : "";
+        $(elementId).textContent = value || "Not set";
+    });
+}
+
+function initializeProfileMenu() {
+    const employeeId = localStorage.getItem("e3EmployeeId");
+    const sessionExpiresAt = Number(localStorage.getItem("e3SessionExpiresAt"));
+    if (!employeeId || !Number.isFinite(sessionExpiresAt) || sessionExpiresAt <= Date.now()) {
+        window.location.replace("/login");
+        return false;
+    }
+
+    const menu = $("profileMenu");
+    const button = $("profileMenuBtn");
+    const dropdown = $("profileDropdown");
+    $("profileEmployeeId").textContent = employeeId;
+
+    const closeDropdown = () => {
+        dropdown.hidden = true;
+        button.setAttribute("aria-expanded", "false");
+    };
+
+    button.addEventListener("click", () => {
+        dropdown.hidden = !dropdown.hidden;
+        button.setAttribute("aria-expanded", String(!dropdown.hidden));
+    });
+
+    document.addEventListener("click", (event) => {
+        if (!menu.contains(event.target)) closeDropdown();
+    });
+
+    document.addEventListener("keydown", (event) => {
+        if (event.key === "Escape" && !dropdown.hidden) {
+            closeDropdown();
+            button.focus();
+        }
+    });
+
+    $("logoutBtn").addEventListener("click", () => {
+        [
+            "e3EmployeeId",
+            "e3EmployeeName",
+            "e3SessionExpiresAt",
+            "e3VehicleVin",
+            "e3VehicleRegistration",
+            "e3VehicleMobile",
+            "e3VehicleVariant",
+            "e3AutoVerifyFirmware"
+        ].forEach((key) => localStorage.removeItem(key));
+        window.location.replace("/login");
+    });
+
+    return true;
+}
+
+if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", initializeDashboard, { once: true });
+} else {
+    initializeDashboard();
+}

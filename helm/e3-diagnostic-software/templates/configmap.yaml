@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: e3-diagnostic-software
+  labels:
+    app: e3-diagnostic-software
+data:
+  APP_PORT: {{ .Values.config.appPort | quote }}
+  PORT: {{ .Values.config.port | quote }}
+  DOCUMENTS_API_URL: {{ .Values.config.documentsApiUrl | quote }}
+  SOFTWARE_VERSIONS_API_URL: {{ .Values.config.softwareVersionsApiUrl | quote }}
+  APP_VERSION: {{ .Values.config.appVersion | quote }}
